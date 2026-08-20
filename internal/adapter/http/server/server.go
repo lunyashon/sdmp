@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/lunyashon/sdmp/internal/lib/config"
 )
 
 type Server struct {
@@ -14,16 +16,21 @@ type Server struct {
 	logger     *slog.Logger
 }
 
-func New(port string, handler http.Handler, logger *slog.Logger) *Server {
+func New(
+	port string,
+	handler http.Handler,
+	logger *slog.Logger,
+	config *config.Config,
+) *Server {
 	return &Server{
 		httpServer: &http.Server{
 			Addr:    fmt.Sprintf(":%s", port),
 			Handler: handler,
 			// Безопасные сетевые таймауты
-			ReadHeaderTimeout: 5 * time.Second,  // Защита от Slowloris (чтение заголовков)
-			ReadTimeout:       10 * time.Second, // Макс. время чтения всего запроса (body)
-			WriteTimeout:      10 * time.Second, // Макс. время записи ответа
-			IdleTimeout:       30 * time.Second, // Время жизни простаивающего Keep-Alive соединения
+			ReadHeaderTimeout: time.Duration(config.ReadHeaderTimeout) * time.Second, // Защита от Slowloris (чтение заголовков)
+			ReadTimeout:       time.Duration(config.ReadTimeout) * time.Second,       // Макс. время чтения всего запроса (body)
+			WriteTimeout:      time.Duration(config.WriteTimeout) * time.Second,      // Макс. время записи ответа
+			IdleTimeout:       time.Duration(config.IdleTimeout) * time.Second,       // Время жизни простаивающего Keep-Alive соединения
 		},
 		logger: logger,
 	}
