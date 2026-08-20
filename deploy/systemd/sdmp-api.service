@@ -1,0 +1,15 @@
+[Unit]
+Description=SDMP API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/projects/sdmp
+ExecStart=/usr/local/bin/sdmp-api
+Restart=on-failure
+RestartSec=3
+Environment=CONFIG_PATH=/root/projects/sdmp/config/.env
+Environment=GIN_MODE=release
+
+[Install]
+WantedBy=multi-user.target
