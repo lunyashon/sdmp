@@ -2,55 +2,66 @@ package usecase
 
 import (
 	"context"
-	"encoding/csv"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
+	"github.com/lunyashon/sdmp/internal/lib/clock"
 	"github.com/lunyashon/sdmp/internal/port"
 )
 
-const maxLeadMonths = 24
+const (
+	LeadDateLayout = "02.01.2006 15:04:05"
+	defaultLimit   = 10
+	maxLimit       = 100
+)
 
 type LeadFilterQuery struct {
-	SourceID string
-	DateFrom string
-	DateTo   string
+	DateFrom   string
+	DateTo     string
+	Sources    []int
+	ColdLabels []string
+	Regions    []int
+	Operators  []int
+	Statuses   []int
+	Zarya      []string
+	Phone      string
+	City       string
+	Tag        string
+	CallResult *int32
+	Limit      int
+	Offset     int
 }
 
 type LeadFilterResult struct {
-	SourceID      string
-	DateFrom      string
-	DateTo        string
-	MonthsLoaded  []string
-	MonthsMissing []string
-	Leads         []entity.LeadRecord
+	Total  int
+	Limit  int
+	Offset int
+	Leads  []entity.LeadListItem
 }
 
 type LeadService struct {
-	storage port.S3
-	sources port.SourceRepository
-	log     *slog.Logger
+	leads port.LeadRepository
+	log   *slog.Logger
 }
 
-func NewLeadService(storage port.S3, sources port.SourceRepository, log *slog.Logger) *LeadService {
+func NewLeadService(leads port.LeadRepository, log *slog.Logger) *LeadService {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &LeadService{storage: storage, sources: sources, log: log}
+	return &LeadService{leads: leads, log: log}
 }
 
 func (s *LeadService) Filter(ctx context.Context, q LeadFilterQuery) (LeadFilterResult, error) {
-	from, err := parseQueryDate(q.DateFrom, false)
+	from, err := parseLeadDate(q.DateFrom)
 	if err != nil {
 		return LeadFilterResult{}, fmt.Errorf("%w: date_from: %v", domain.ErrInvalidInput, err)
 	}
-	to, err := parseQueryDate(q.DateTo, true)
+	to, err := parseLeadDate(q.DateTo)
 	if err != nil {
 		return LeadFilterResult{}, fmt.Errorf("%w: date_to: %v", domain.ErrInvalidInput, err)
 	}
@@ -58,205 +69,166 @@ func (s *LeadService) Filter(ctx context.Context, q LeadFilterQuery) (LeadFilter
 		return LeadFilterResult{}, fmt.Errorf("%w: date_to must be >= date_from", domain.ErrInvalidInput)
 	}
 
-	code, err := s.resolveSourceCode(ctx, q.SourceID)
+	limit := q.Limit
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	offset := q.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	filter := port.LeadListFilter{
+		DateFrom:   from,
+		DateTo:     to,
+		Sources:    q.Sources,
+		ColdLabels: q.ColdLabels,
+		Regions:    q.Regions,
+		Operators:  q.Operators,
+		Statuses:   q.Statuses,
+		Zarya:      q.Zarya,
+		Phone:      normalizeListPhone(q.Phone),
+		City:       strings.TrimSpace(q.City),
+		Tag:        strings.TrimSpace(q.Tag),
+		CallResult: q.CallResult,
+		Limit:      limit,
+		Offset:     offset,
+	}
+
+	items, total, err := s.leads.List(ctx, filter)
 	if err != nil {
 		return LeadFilterResult{}, err
 	}
-
-	months, err := monthsInRange(from, to)
-	if err != nil {
-		return LeadFilterResult{}, err
-	}
-
-	result := LeadFilterResult{
-		SourceID:      code,
-		DateFrom:      q.DateFrom,
-		DateTo:        q.DateTo,
-		MonthsLoaded:  make([]string, 0, len(months)),
-		MonthsMissing: make([]string, 0),
-		Leads:         make([]entity.LeadRecord, 0),
-	}
-
-	for _, m := range months {
-		key := monthCSVKey(code, m)
-		leads, err := s.readMonth(ctx, key, from, to)
-		if err != nil {
-			if errors.Is(err, domain.ErrNotFound) {
-				result.MonthsMissing = append(result.MonthsMissing, m.label())
-				continue
-			}
-			return LeadFilterResult{}, err
-		}
-		result.MonthsLoaded = append(result.MonthsLoaded, m.label())
-		result.Leads = append(result.Leads, leads...)
-	}
-
-	return result, nil
+	return LeadFilterResult{Total: total, Limit: limit, Offset: offset, Leads: items}, nil
 }
 
-func (s *LeadService) resolveSourceCode(_ context.Context, raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", fmt.Errorf("%w: source_id is required", domain.ErrInvalidInput)
-	}
-	// source_id в query — код Bitrix / папка в S3 (UC_* или 141/143/144), не PK таблицы source.
-	return raw, nil
-}
-
-func (s *LeadService) readMonth(ctx context.Context, key string, from, to time.Time) ([]entity.LeadRecord, error) {
-	obj, err := s.storage.Get(ctx, key)
+func (s *LeadService) IncomingStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadSourceCount, error) {
+	from, to, err := parseStatsRange(dateFrom, dateTo)
 	if err != nil {
 		return nil, err
 	}
-	defer obj.Body.Close()
-
-	reader := csv.NewReader(obj.Body)
-	reader.ReuseRecord = true
-	reader.LazyQuotes = true
-	reader.FieldsPerRecord = -1
-
-	header, err := reader.Read()
+	items, err := s.leads.CountBySource(ctx, from, to)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return []entity.LeadRecord{}, nil
-		}
-		return nil, fmt.Errorf("read csv header %s: %w", key, err)
+		return nil, err
 	}
-	idx := csvIndex(header)
-	if idx.dateCreate < 0 {
-		return nil, fmt.Errorf("%w: csv %s has no date_create column", domain.ErrInvalidInput, key)
+	if items == nil {
+		items = []entity.LeadSourceCount{}
 	}
+	return items, nil
+}
 
-	out := make([]entity.LeadRecord, 0, 1024)
-	for {
-		rec, err := reader.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read csv %s: %w", key, err)
-		}
-		rawDate := field(rec, idx.dateCreate)
-		created, err := parseCSVDate(rawDate)
-		if err != nil {
-			continue
-		}
-		if created.Before(from) || created.After(to) {
-			continue
-		}
-		out = append(out, entity.LeadRecord{
-			Phone:      field(rec, idx.phone),
-			SourceID:   field(rec, idx.sourceID),
-			Region:     field(rec, idx.region),
-			Operator:   field(rec, idx.operator),
-			City:       field(rec, idx.city),
-			Name:       strings.TrimSpace(field(rec, idx.name)),
-			OwnerID:    field(rec, idx.ownerID),
-			DateCreate: rawDate,
-		})
+func (s *LeadService) EnrichmentStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadEnrichmentStat, error) {
+	from, to, err := parseStatsRange(dateFrom, dateTo)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
-}
-
-type yearMonth struct {
-	year  int
-	month time.Month
-}
-
-func (m yearMonth) label() string {
-	return fmt.Sprintf("%04d-%02d", m.year, m.month)
-}
-
-func monthsInRange(from, to time.Time) ([]yearMonth, error) {
-	cur := time.Date(from.Year(), from.Month(), 1, 0, 0, 0, 0, from.Location())
-	end := time.Date(to.Year(), to.Month(), 1, 0, 0, 0, 0, to.Location())
-	out := make([]yearMonth, 0, 8)
-	for !cur.After(end) {
-		out = append(out, yearMonth{year: cur.Year(), month: cur.Month()})
-		if len(out) > maxLeadMonths {
-			return nil, fmt.Errorf("%w: range exceeds %d months", domain.ErrInvalidInput, maxLeadMonths)
-		}
-		cur = cur.AddDate(0, 1, 0)
+	items, err := s.leads.CountEnrichmentBySource(ctx, from, to)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
-}
-
-func monthCSVKey(code string, m yearMonth) string {
-	file := fmt.Sprintf("%s-%04d%02d.csv", code, m.year, m.month)
-	return port.JoinKey(code, fmt.Sprintf("%04d", m.year), fmt.Sprintf("%02d", m.month), "csv", file)
-}
-
-type csvCols struct {
-	phone, sourceID, region, operator, city, name, ownerID, dateCreate int
-}
-
-func csvIndex(header []string) csvCols {
-	idx := csvCols{-1, -1, -1, -1, -1, -1, -1, -1}
-	for i, col := range header {
-		switch strings.ToLower(strings.TrimSpace(col)) {
-		case "phone":
-			idx.phone = i
-		case "source_id":
-			idx.sourceID = i
-		case "region":
-			idx.region = i
-		case "operator":
-			idx.operator = i
-		case "city":
-			idx.city = i
-		case "name":
-			idx.name = i
-		case "owner_id":
-			idx.ownerID = i
-		case "date_create":
-			idx.dateCreate = i
-		}
+	if items == nil {
+		items = []entity.LeadEnrichmentStat{}
 	}
-	return idx
+	return items, nil
 }
 
-func field(rec []string, i int) string {
-	if i < 0 || i >= len(rec) {
-		return ""
+func (s *LeadService) ZaryaStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadZaryaStat, error) {
+	from, to, err := parseStatsRange(dateFrom, dateTo)
+	if err != nil {
+		return nil, err
 	}
-	return rec[i]
+	items, err := s.leads.CountZaryaBySource(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []entity.LeadZaryaStat{}
+	}
+	return items, nil
 }
 
-func parseQueryDate(raw string, endOfDay bool) (time.Time, error) {
+func (s *LeadService) Get(ctx context.Context, id int64) (entity.LeadDetail, error) {
+	if id <= 0 {
+		return entity.LeadDetail{}, fmt.Errorf("%w: id is required", domain.ErrInvalidInput)
+	}
+	return s.leads.Get(ctx, id)
+}
+
+func (s *LeadService) ApplyCallResult(ctx context.Context, skorozvonLeadID string, in entity.LeadCallResult) error {
+	skorozvonLeadID = strings.TrimSpace(skorozvonLeadID)
+	if skorozvonLeadID == "" {
+		return fmt.Errorf("%w: lead.id is required", domain.ErrInvalidInput)
+	}
+	return s.leads.ApplyCallResult(ctx, skorozvonLeadID, in)
+}
+
+func parseLeadDate(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return time.Time{}, fmt.Errorf("empty date")
+		return time.Time{}, fmt.Errorf("required, format %s", LeadDateLayout)
 	}
-	layouts := []string{
-		time.RFC3339,
-		"2006-01-02 15:04:05",
-		"2006-01-02",
+	t, err := time.ParseInLocation(LeadDateLayout, raw, clock.Location)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("want %s", LeadDateLayout)
 	}
-	var parsed time.Time
-	var err error
-	for _, layout := range layouts {
-		parsed, err = time.ParseInLocation(layout, raw, time.Local)
-		if err == nil {
-			if layout == "2006-01-02" && endOfDay {
-				return parsed.Add(24*time.Hour - time.Nanosecond), nil
-			}
-			return parsed, nil
-		}
-	}
-	return time.Time{}, err
+	return t, nil
 }
 
-func parseCSVDate(raw string) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	layouts := []string{
-		"2006-01-02 15:04:05",
-		time.RFC3339,
-		"2006-01-02",
+func parseStatsRange(dateFrom, dateTo string) (time.Time, time.Time, error) {
+	from, err := parseIncomingBound(dateFrom, false)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("%w: date_from: %v", domain.ErrInvalidInput, err)
 	}
-	for _, layout := range layouts {
-		if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+	to, err := parseIncomingBound(dateTo, true)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("%w: date_to: %v", domain.ErrInvalidInput, err)
+	}
+	if to.Before(from) {
+		return time.Time{}, time.Time{}, fmt.Errorf("%w: date_to must be >= date_from", domain.ErrInvalidInput)
+	}
+	return from, to, nil
+}
+
+func parseIncomingBound(raw string, endOfDay bool) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("required, format %s or 2006-01-02", LeadDateLayout)
+	}
+	for _, layout := range []string{LeadDateLayout, "2006-01-02 15:04:05", time.RFC3339} {
+		if t, err := time.ParseInLocation(layout, raw, clock.Location); err == nil {
 			return t, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("invalid date %q", raw)
+	for _, layout := range []string{"2006-01-02", "02.01.2006"} {
+		t, err := time.ParseInLocation(layout, raw, clock.Location)
+		if err != nil {
+			continue
+		}
+		if endOfDay {
+			t = t.Add(24*time.Hour - time.Second)
+		}
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("want %s or 2006-01-02", LeadDateLayout)
+}
+
+func normalizeListPhone(raw string) string {
+	var b strings.Builder
+	for _, r := range raw {
+		if unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	digits := b.String()
+	switch {
+	case len(digits) == 11 && digits[0] == '8':
+		return "7" + digits[1:]
+	case len(digits) == 10:
+		return "7" + digits
+	default:
+		return digits
+	}
 }

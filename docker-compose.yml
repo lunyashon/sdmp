@@ -1,0 +1,28 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: sdmp-api
+    container_name: sdmp-api
+    env_file:
+      - config/.env
+    ports:
+      - 8080:8080
+    volumes;
+      - ./config/.env:/app/config/.env
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: sdmp-worker
+    container_name: sdmp-worker
+    env_file:
+      - config/.env
+    volumes:
+      - ./config/.env:/app/config/.env
+      - ./logs:/app/logs
+    restart: unless-stopped

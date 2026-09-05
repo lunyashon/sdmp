@@ -3,8 +3,6 @@ package usecase
 import (
 	"context"
 	"errors"
-	"io"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,132 +11,224 @@ import (
 	"github.com/lunyashon/sdmp/internal/port"
 )
 
-type stubS3 struct {
-	files map[string]string
+type stubLeadList struct {
+	got   port.LeadListFilter
+	items []entity.LeadListItem
+	total int
+	err   error
 }
 
-func (s stubS3) Put(context.Context, string, io.Reader, port.PutOptions) error {
+func (s *stubLeadList) InsertAccepted(context.Context, entity.LeadRow, entity.OutboxMessage) (int64, error) {
+	return 0, nil
+}
+
+func (s *stubLeadList) List(_ context.Context, f port.LeadListFilter) ([]entity.LeadListItem, int, error) {
+	s.got = f
+	return s.items, s.total, s.err
+}
+
+func (s *stubLeadList) CountBySource(context.Context, time.Time, time.Time) ([]entity.LeadSourceCount, error) {
+	return []entity.LeadSourceCount{{SourceID: 7, Count: 21}}, s.err
+}
+
+func (s *stubLeadList) CountEnrichmentBySource(context.Context, time.Time, time.Time) ([]entity.LeadEnrichmentStat, error) {
+	return []entity.LeadEnrichmentStat{{
+		SourceID: 7, Total: 20,
+		Region:   entity.LeadGeoShare{Supplier: 10, Provider: 6, Unknown: 4},
+		Operator: entity.LeadGeoShare{Supplier: 8, Provider: 9, Unknown: 3},
+	}}, s.err
+}
+
+func (s *stubLeadList) CountZaryaBySource(context.Context, time.Time, time.Time) ([]entity.LeadZaryaStat, error) {
+	return []entity.LeadZaryaStat{{SourceID: 7, Total: 15, Unique: 9, Dup: 6}}, s.err
+}
+
+func (s *stubLeadList) Get(context.Context, int64) (entity.LeadDetail, error) {
+	return entity.LeadDetail{}, nil
+}
+
+func (s *stubLeadList) UpdateEnrichment(context.Context, int64, entity.LeadEnrichment) error {
 	return nil
 }
-func (s stubS3) Delete(context.Context, string) error { return nil }
-func (s stubS3) Exists(context.Context, string) (bool, error) {
-	return false, nil
+
+func (s *stubLeadList) InsertDispatch(context.Context, entity.Dispatch) error {
+	return nil
 }
-func (s stubS3) List(context.Context, string) ([]port.ObjectInfo, error) {
-	return nil, nil
+
+func (s *stubLeadList) SaveZaryaResult(context.Context, int64, bool) error {
+	return nil
 }
-func (s stubS3) Ping(context.Context) error { return nil }
-func (s stubS3) Get(_ context.Context, key string) (*port.Object, error) {
-	body, ok := s.files[key]
-	if !ok {
-		return nil, domain.ErrNotFound
+
+func (s *stubLeadList) BindSkorozvon(context.Context, int64, string, string) error {
+	return nil
+}
+
+func (s *stubLeadList) ApplyCallResult(context.Context, string, entity.LeadCallResult) error {
+	return nil
+}
+
+func TestFilterLeads(t *testing.T) {
+	created := time.Date(2026, 8, 27, 16, 27, 56, 0, time.Local)
+	repo := &stubLeadList{
+		total: 2,
+		items: []entity.LeadListItem{{
+			DateCreate: created,
+			Source:     "GDMP",
+			ColdLabel:  "",
+			Region:     "Москва",
+			Operator:   "БИЛАЙН",
+			Stage:      "в Б24",
+			Phone:      "79009876539",
+		}},
 	}
-	return &port.Object{
-		Key:  key,
-		Body: io.NopCloser(strings.NewReader(body)),
-	}, nil
-}
-
-type stubSources struct {
-	byID map[int]entity.Source
-}
-
-func (s stubSources) List(context.Context) ([]entity.Source, error) { return nil, nil }
-func (s stubSources) GetByBitrixCode(context.Context, string) (entity.Source, error) {
-	return entity.Source{}, domain.ErrNotFound
-}
-func (s stubSources) GetByID(_ context.Context, id int) (entity.Source, error) {
-	src, ok := s.byID[id]
-	if !ok {
-		return entity.Source{}, domain.ErrNotFound
-	}
-	return src, nil
-}
-
-func TestMonthsInRange(t *testing.T) {
-	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.Local)
-	to := time.Date(2026, 8, 2, 0, 0, 0, 0, time.Local)
-	got, err := monthsInRange(from, to)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 || got[0].label() != "2026-07" || got[1].label() != "2026-08" {
-		t.Fatalf("unexpected months: %+v", got)
-	}
-}
-
-func TestMonthCSVKey(t *testing.T) {
-	key := monthCSVKey("UC_L26K09", yearMonth{2023, time.October})
-	want := "UC_L26K09/2023/10/csv/UC_L26K09-202310.csv"
-	if key != want {
-		t.Fatalf("got %s want %s", key, want)
-	}
-	key = monthCSVKey("143", yearMonth{2026, time.February})
-	want = "143/2026/02/csv/143-202602.csv"
-	if key != want {
-		t.Fatalf("got %s want %s", key, want)
-	}
-}
-
-func TestFilterLeadsFromCSV(t *testing.T) {
-	csvBody := "phone,source_id,region,operator,city,name,owner_id,date_create\n" +
-		"+79009876539,UC_L26K09,\"\",\"\",Липецк,Евгений,784338,2023-10-27 09:27:10\n" +
-		"+79011079331,UC_L26K09,\"\",\"\",Армавир,Роман,784378,2023-10-28 10:02:16\n"
-
-	svc := NewLeadService(stubS3{files: map[string]string{
-		"UC_L26K09/2023/10/csv/UC_L26K09-202310.csv": csvBody,
-	}}, stubSources{}, nil)
-
+	svc := NewLeadService(repo, nil)
 	res, err := svc.Filter(context.Background(), LeadFilterQuery{
-		SourceID: "UC_L26K09",
-		DateFrom: "2023-10-27",
-		DateTo:   "2023-10-27",
+		DateFrom:   "01.08.2026 00:00:00",
+		DateTo:     "30.08.2026 23:59:59",
+		Sources:    []int{1, 12},
+		ColdLabels: []string{"ВР"},
+		Regions:    []int{1, 5},
+		Operators:  []int{2, 3},
+		Zarya:      []string{"Чистый", "Дубль"},
+		Phone:      "8 (900) 987-65-39",
+		Limit:      0,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Leads) != 1 || res.Leads[0].Phone != "+79009876539" {
-		t.Fatalf("leads: %+v", res.Leads)
+	if res.Total != 2 || res.Limit != 10 || len(res.Leads) != 1 {
+		t.Fatalf("%+v", res)
 	}
-	if len(res.MonthsLoaded) != 1 {
-		t.Fatalf("loaded: %v", res.MonthsLoaded)
+	if repo.got.Phone != "79009876539" {
+		t.Fatalf("phone %q", repo.got.Phone)
+	}
+	if len(repo.got.Sources) != 2 || repo.got.ColdLabels[0] != "ВР" {
+		t.Fatalf("filter %+v", repo.got)
+	}
+	if len(repo.got.Regions) != 2 || len(repo.got.Operators) != 2 || len(repo.got.Zarya) != 2 || repo.got.Zarya[0] != "Чистый" {
+		t.Fatalf("filter %+v", repo.got)
 	}
 }
 
 func TestFilterInvalidRange(t *testing.T) {
-	svc := NewLeadService(stubS3{files: map[string]string{}}, stubSources{}, nil)
+	svc := NewLeadService(&stubLeadList{}, nil)
 	_, err := svc.Filter(context.Background(), LeadFilterQuery{
-		SourceID: "UC_L26K09",
-		DateFrom: "2023-10-28",
-		DateTo:   "2023-10-27",
+		DateFrom: "30.08.2026 23:59:59",
+		DateTo:   "01.08.2026 00:00:00",
 	})
 	if !errors.Is(err, domain.ErrInvalidInput) {
 		t.Fatalf("got %v", err)
 	}
 }
 
-func TestNumericSourceIDUsesS3Folder(t *testing.T) {
-	csvBody := "phone,source_id,region,operator,city,name,owner_id,date_create\n" +
-		"+79001234567,143,\"\",\"\",Москва,Иван,1,2026-02-10 12:00:00\n"
+func TestFilterRequiresDates(t *testing.T) {
+	svc := NewLeadService(&stubLeadList{}, nil)
+	_, err := svc.Filter(context.Background(), LeadFilterQuery{})
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("got %v", err)
+	}
+}
 
-	svc := NewLeadService(stubS3{files: map[string]string{
-		"143/2026/02/csv/143-202602.csv": csvBody,
-	}}, stubSources{byID: map[int]entity.Source{
-		143: {ID: 143, BitrixCode: "UC_WBLW0N", Name: "Робот Карл"},
-	}}, nil)
+func TestIncomingStats(t *testing.T) {
+	got, err := NewLeadService(&stubLeadList{}, nil).IncomingStats(context.Background(), "2026-08-14", "2026-08-20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SourceID != 7 || got[0].Count != 21 {
+		t.Fatalf("%+v", got)
+	}
+}
 
-	res, err := svc.Filter(context.Background(), LeadFilterQuery{
-		SourceID: "143",
-		DateFrom: "2026-02-01",
-		DateTo:   "2026-02-28",
+func TestEnrichmentStats(t *testing.T) {
+	got, err := NewLeadService(&stubLeadList{}, nil).EnrichmentStats(context.Background(), "2026-08-14", "2026-08-20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Region.Supplier != 10 || got[0].Operator.Unknown != 3 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestZaryaStats(t *testing.T) {
+	got, err := NewLeadService(&stubLeadList{}, nil).ZaryaStats(context.Background(), "2026-08-14", "2026-08-20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Unique != 9 || got[0].Dup != 6 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestGetLead(t *testing.T) {
+	created := time.Date(2026, 8, 27, 16, 27, 56, 0, time.Local)
+	repo := &stubLeadGet{
+		detail: entity.LeadDetail{ID: 7, Phone: "79001234567", CreatedAt: created, Stage: "принята"},
+	}
+	got, err := NewLeadService(repo, nil).Get(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != 7 || repo.gotID != 7 {
+		t.Fatalf("%+v id=%d", got, repo.gotID)
+	}
+}
+
+func TestGetLeadInvalidID(t *testing.T) {
+	_, err := NewLeadService(&stubLeadList{}, nil).Get(context.Background(), 0)
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+type stubCallResultRepo struct {
+	stubLeadList
+	gotID string
+	got   entity.LeadCallResult
+	err   error
+}
+
+func (s *stubCallResultRepo) ApplyCallResult(_ context.Context, skorozvonLeadID string, in entity.LeadCallResult) error {
+	s.gotID = skorozvonLeadID
+	s.got = in
+	return s.err
+}
+
+func TestApplyCallResult(t *testing.T) {
+	ended := time.Date(2019, 1, 30, 10, 6, 8, 0, time.UTC)
+	result := int32(54321)
+	repo := &stubCallResultRepo{}
+	err := NewLeadService(repo, nil).ApplyCallResult(context.Background(), " 123456788 ", entity.LeadCallResult{
+		CallID:     "987654321",
+		CallURL:    "https://api.skorozvon.ru/api/calls/987654321.mp3",
+		CallLastAt: &ended,
+		CallResult: &result,
+		ProjectNum: "12345678",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.SourceID != "143" {
-		t.Fatalf("source %s", res.SourceID)
+	if repo.gotID != "123456788" {
+		t.Fatalf("id %q", repo.gotID)
 	}
-	if len(res.Leads) != 1 {
-		t.Fatalf("leads: %+v", res.Leads)
+	if repo.got.CallID != "987654321" || repo.got.ProjectNum != "12345678" || repo.got.CallResult == nil || *repo.got.CallResult != 54321 {
+		t.Fatalf("%+v", repo.got)
 	}
+}
+
+func TestApplyCallResultRequiresLeadID(t *testing.T) {
+	err := NewLeadService(&stubLeadList{}, nil).ApplyCallResult(context.Background(), "  ", entity.LeadCallResult{})
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+type stubLeadGet struct {
+	stubLeadList
+	detail entity.LeadDetail
+	gotID  int64
+}
+
+func (s *stubLeadGet) Get(_ context.Context, id int64) (entity.LeadDetail, error) {
+	s.gotID = id
+	return s.detail, nil
 }

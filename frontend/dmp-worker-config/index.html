@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Настройка Worker</title>
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Настройка Worker</h1>
+  <p class="sub">Прототип настройки Worker на моковых данных. Живые справочники и строки — в <a href="/">архиве</a> (<code>/rest/sources</code>, <code>/rest/leads</code>). Запись конфига в API пока не подключена.</p>
+
+  <div class="section-switch" id="section-switch"></div>
+  <div class="tabs" id="tabs"></div>
+  <div id="panels"></div>
+
+  <div class="overlay" id="drob-overlay" onclick="if(event.target===this) closeDroblenieModal(true)">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <p class="modal-title" id="drob-modal-title">—</p>
+          <p class="modal-sub" id="drob-modal-sub">Просмотр</p>
+        </div>
+        <button class="card-close" onclick="closeDroblenieModal(true)">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="edit-mode-banner" id="drob-edit-banner">
+          Режим редактирования — старые правила продолжают действовать в проде, пока изменения не применены.
+        </div>
+        <div id="drob-modal-rows"></div>
+        <div id="drob-modal-empty" style="display:none; font-size:12.5px; color:var(--text-muted); margin:10px 0;"></div>
+        <button class="btn btn-sm" id="drob-add-rule-btn" style="margin-top:10px; display:none;" onclick="draftAddRule()">+ Добавить правило</button>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="drob-btn-edit" onclick="enterDroblenieEditMode()">Редактировать</button>
+        <div id="drob-edit-actions" style="display:none; gap:8px;">
+          <button class="btn" onclick="closeDroblenieModal(true)">Отменить</button>
+          <button class="btn btn-primary" onclick="applyDroblenieDraft()">Применить изменения</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="partner-overlay" onclick="if(event.target===this) closePartnerModal(true)">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <p class="modal-title" id="partner-modal-title">—</p>
+          <p class="modal-sub" id="partner-modal-sub">Просмотр</p>
+        </div>
+        <button class="card-close" onclick="closePartnerModal(true)">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="edit-mode-banner" id="partner-edit-banner">
+          Режим редактирования — старые условия продолжают действовать в проде, пока изменения не применены.
+        </div>
+        <div id="partner-modal-body-content"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="partner-btn-edit" onclick="enterPartnerEditMode()">Редактировать</button>
+        <div id="partner-edit-actions" style="display:none; gap:8px;">
+          <button class="btn" onclick="closePartnerModal(true)">Отменить</button>
+          <button class="btn btn-primary" onclick="applyPartnerDraft()">Применить изменения</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="custom-prompt-overlay">
+    <div class="modal-card" style="width:420px;">
+      <div class="modal-head"><p class="modal-title" id="custom-prompt-title">—</p></div>
+      <div class="modal-body">
+        <input type="text" class="cell-input" id="custom-prompt-input" style="border:1px solid var(--border-strong);" onkeydown="if(event.key==='Enter') customPromptConfirm(); if(event.key==='Escape') customPromptCancel();">
+      </div>
+      <div class="modal-foot">
+        <button class="btn" onclick="customPromptCancel()">Отмена</button>
+        <button class="btn btn-primary" onclick="customPromptConfirm()">ОК</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="custom-confirm-overlay">
+    <div class="modal-card" style="width:460px;">
+      <div class="modal-head"><p class="modal-title">Подтверждение</p></div>
+      <div class="modal-body">
+        <p id="custom-confirm-text" style="white-space:pre-line; font-size:13.5px; line-height:1.6; margin:0;"></p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" onclick="customConfirmAnswer(false)">Отмена</button>
+        <button class="btn btn-primary" onclick="customConfirmAnswer(true)">Продолжить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="svyazka-overlay" onclick="if(event.target===this) closeSvyazkaModal(true)">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <p class="modal-title" id="svyazka-modal-title">—</p>
+          <p class="modal-sub" id="svyazka-modal-sub">Просмотр</p>
+        </div>
+        <button class="card-close" onclick="closeSvyazkaModal(true)">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="edit-mode-banner" id="svyazka-edit-banner">
+          Режим редактирования — старые условия продолжают действовать в проде, пока изменения не применены.
+        </div>
+        <div id="svyazka-modal-body-content"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="svyazka-btn-edit" onclick="enterSvyazkaEditMode()">Редактировать</button>
+        <div id="svyazka-edit-actions" style="display:none; gap:8px;">
+          <button class="btn" onclick="closeSvyazkaModal(true)">Отменить</button>
+          <button class="btn btn-primary" id="svyazka-apply-btn" onclick="applySvyazkaDraft()">Применить изменения</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="api-note">
+    Прототип на моковых данных. Реальная запись — <code>PUT/POST/DELETE /rest/v2/config/{entity}</code> на таблицы физмодели: <code>source</code> (иерархия через <code>roditel_id</code>), <code>source_droblenie</code>, <code>source_upk</code>, <code>pp_region_project</code>, <code>source_skorozvon</code>, <code>upk</code>, <code>operator</code>, <code>region</code>. Все выпадающие списки — комбобоксы с поиском по тексту (клик открывает, набор фильтрует).
+  </div>
+
+</div>
+
+<script src="assets/js/script.js"></script>
+</body>
+</html>

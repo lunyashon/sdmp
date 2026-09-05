@@ -12,7 +12,9 @@ import (
 	"github.com/lunyashon/sdmp/internal/adapter/http/handler"
 	"github.com/lunyashon/sdmp/internal/adapter/http/server"
 	"github.com/lunyashon/sdmp/internal/adapter/postgres"
+	redisadapter "github.com/lunyashon/sdmp/internal/adapter/redis"
 	s3adapter "github.com/lunyashon/sdmp/internal/adapter/s3"
+	"github.com/lunyashon/sdmp/internal/adapter/skorozvon"
 	"github.com/lunyashon/sdmp/internal/lib/config"
 	sl "github.com/lunyashon/sdmp/internal/lib/logger"
 	"github.com/lunyashon/sdmp/internal/usecase"
@@ -62,13 +64,50 @@ func Run() error {
 	}
 	log.Info("s3 ready", "bucket", cfg.S3Bucket, "endpoint", cfg.S3Endpoint)
 
+	cache, err := redisadapter.New(redisadapter.Config{
+		Addr:     cfg.RedisAddr,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	}, log)
+	if err != nil {
+		return fmt.Errorf("init redis: %w", err)
+	}
+	defer cache.Close()
+	if err := cache.Ping(ctx); err != nil {
+		return fmt.Errorf("redis ping: %w", err)
+	}
+	log.Info("redis ready", "addr", cfg.RedisAddr)
+
 	sourceRepo := postgres.NewSourceRepo(pool)
+	leadRepo := postgres.NewLeadRepo(pool)
+	dictRepo := postgres.NewDictRepo(pool)
+	partnerRepo := postgres.NewPartnerRepo(pool)
+	splitRepo := postgres.NewSplitRepo(pool)
+	skorozvonProjectRepo := postgres.NewSkorozvonProjectRepo(pool)
 	sourceSvc := usecase.NewSourceService(sourceRepo)
-	leadSvc := usecase.NewLeadService(storage, sourceRepo, log)
+	leadSvc := usecase.NewLeadService(leadRepo, log)
+	partnerSvc := usecase.NewPartnerService(partnerRepo, usecase.NewPartnerPoster(8*time.Second))
+	splitSvc := usecase.NewSplitService(splitRepo, sourceRepo, dictRepo)
+	skorozvonClient := skorozvon.New(skorozvon.Config{
+		Login:  cfg.SkorozvonLogin,
+		APIKey: cfg.SkorozvonAPIKey,
+		AppID:  cfg.SkorozvonAppID,
+		AppKey: cfg.SkorozvonAppKey,
+	}, cache, log)
+	skorozvonProjectSvc := usecase.NewSkorozvonProjectService(skorozvonProjectRepo, skorozvonClient)
+	skorozvonLinkSvc := usecase.NewSkorozvonLinkService(postgres.NewSkorozvonLinkRepo(pool))
+	receiveSvc := usecase.NewReceiveLeadService(sourceRepo, leadRepo, storage, cache, log)
 
 	router := httpgin.NewRouter(httpgin.Handlers{
-		Leads:   handler.NewLeadsHandler(leadSvc, log),
-		Sources: handler.NewSourcesHandler(sourceSvc, log),
+		Leads:             handler.NewLeadsHandler(leadSvc, log),
+		Sources:           handler.NewSourcesHandler(sourceSvc, log),
+		Dicts:             handler.NewDictsHandler(dictRepo, log),
+		Partners:          handler.NewPartnersHandler(partnerSvc, log),
+		Splits:            handler.NewSplitsHandler(splitSvc, log),
+		SkorozvonProjects: handler.NewSkorozvonProjectsHandler(skorozvonProjectSvc, log),
+		SkorozvonLinks:    handler.NewSkorozvonLinksHandler(skorozvonLinkSvc, log),
+		SkorozvonEvents:   handler.NewSkorozvonEventsHandler(leadSvc, log),
+		CRMLead:           handler.NewCRMLeadHandler(receiveSvc, log),
 	})
 	srv := server.New(cfg.Port, router, log, cfg)
 

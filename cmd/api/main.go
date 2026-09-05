@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	_ "time/tzdata"
+
 	"github.com/lunyashon/sdmp/internal/app"
 )
 

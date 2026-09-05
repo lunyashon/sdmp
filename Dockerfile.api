@@ -1,0 +1,19 @@
+FROM golang:1.27.0-alpine AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/sdmp-api ./cmd/api/main.go
+
+FROM gcr.io/distroless/static-debian12
+
+WORKDIR /app
+
+COPY --from=builder /out/sdmp-api /app/sdmp-api
+COPY config/.env /app/config/.env
+
+EXPOSE 8080
+ENTRYPOINT ["/app/sdmp-api"]

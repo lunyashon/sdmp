@@ -23,6 +23,12 @@ func HandleError(c *gin.Context, log *slog.Logger, err error) {
 	case errors.Is(err, domain.ErrInvalidInput):
 		log.Warn("invalid input", "error", err, "path", c.Request.URL.Path)
 		c.JSON(http.StatusBadRequest, ErrorBody{Error: err.Error()})
+	case errors.Is(err, domain.ErrUnauthorized):
+		log.Warn("unauthorized", "error", err, "path", c.Request.URL.Path)
+		c.JSON(http.StatusUnauthorized, ErrorBody{Error: err.Error()})
+	case errors.Is(err, domain.ErrForbidden):
+		log.Warn("forbidden", "error", err, "path", c.Request.URL.Path)
+		c.JSON(http.StatusForbidden, ErrorBody{Error: err.Error()})
 	case errors.Is(err, domain.ErrNotFound):
 		log.Warn("not found", "error", err, "path", c.Request.URL.Path)
 		c.JSON(http.StatusNotFound, ErrorBody{Error: err.Error()})

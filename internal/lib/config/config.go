@@ -34,6 +34,21 @@ type Config struct {
 	DBUser     string
 	DBPassword string
 	DBName     string
+
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
+
+	PhoneSearchURL   string
+	PhoneSearchToken string
+	ZaryaURL         string
+
+	SkorozvonLogin  string
+	SkorozvonAPIKey string
+	SkorozvonAppID  string
+	SkorozvonAppKey string
+
+	Gomaxprocs int
 }
 
 func Load(path string) (*Config, error) {
@@ -83,6 +98,17 @@ func getConfig() *Config {
 		DBUser:              envString("DB_USER", "admin"),
 		DBPassword:          envString("DB_PASS", ""),
 		DBName:              envString("DB_NAME", "sdmp"),
+		RedisAddr:           envString("REDIS_ADDR", "127.0.0.1:6379"),
+		RedisPassword:       envString("REDIS_PASSWORD", ""),
+		RedisDB:             envInt("REDIS_DB", 0),
+		PhoneSearchURL:      envString("PHONE_SEARCH_URL", "https://bfl-activity.ru/api/v1/retarget/phone.search"),
+		PhoneSearchToken:    envFirst("PHONE_SEARCH_SECRET_TOKEN", "PHONE_SEARCH_SECRE_TOKEN"),
+		ZaryaURL:            envString("ZARYA_API_URL", ""),
+		Gomaxprocs:          envInt("GOMAXPROCS", 3),
+		SkorozvonLogin:      envString("SKOROZVON_LOGIN", ""),
+		SkorozvonAPIKey:     envString("SKOROZVON_API_KEY", ""),
+		SkorozvonAppID:      envString("SKOROZVON_APP_ID", ""),
+		SkorozvonAppKey:     envString("SKOROZVON_APP_KEY", ""),
 	}
 }
 
@@ -91,6 +117,15 @@ func envString(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envFirst(keys ...string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func envInt(key string, fallback int) int {

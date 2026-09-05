@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Архив строчек DMP</title>
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Архив строчек DMP</h1>
+
+  <div class="panel">
+    <div class="filters-grid" id="filters-grid"></div>
+    <div class="filters-bottom">
+      <div style="display:flex; gap:8px; align-items:center;">
+        <div class="add-field-wrap">
+          <button class="btn btn-dashed" onclick="toggleFieldPicker(event)">+ Добавить поле</button>
+          <div class="field-picker" id="field-picker">
+            <div class="field-picker-search"><input type="text" placeholder="Поиск поля..." oninput="renderFieldPicker(this.value)"></div>
+            <div id="field-picker-list"></div>
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="applyFilters()">Применить</button>
+        <button class="btn btn-ghost" onclick="resetFilters()">Сбросить</button>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button class="btn btn-ghost" style="border:1px dashed var(--border-strong); color:var(--text-2);" onclick="saveCurrentFilter()">Сохранить фильтр</button>
+        <div id="saved-filters-chips" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="toolbar-left">
+      Найдено: <b id="total-count">—</b> строк
+      <span id="selected-info" style="display:none">· выбрано <b id="selected-count">0</b></span>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <div class="col-picker-wrap">
+        <button class="btn" onclick="toggleColPicker(event)">Колонки</button>
+        <div class="col-picker" id="col-picker">
+          <div class="col-picker-head">Отображение колонок</div>
+          <div class="col-picker-list" id="col-picker-list"></div>
+          <div class="col-picker-foot">
+            <button class="btn btn-ghost" style="height:26px; padding:0 8px; font-size:12px;" onclick="resetColumns()">Сбросить</button>
+            <button class="btn btn-primary" style="height:26px; padding:0 10px; font-size:12px;" onclick="document.getElementById('col-picker').classList.remove('show')">Готово</button>
+          </div>
+        </div>
+      </div>
+      <button class="btn" onclick="exportData('selected')">Экспортировать выбранные</button>
+      <button class="btn btn-primary" onclick="exportData('all')">Экспортировать по фильтру</button>
+    </div>
+  </div>
+
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr id="table-head-row">
+        <th class="chk"><input type="checkbox" id="chk-all" onchange="toggleAll(this)"></th>
+      </tr>
+    </thead>
+    <tbody id="table-body"></tbody>
+  </table>
+  </div>
+
+  <div id="empty-state" class="empty" style="display:none">Ничего не найдено по заданным фильтрам</div>
+
+  <div class="pager">
+    <div class="pager-left" id="pager-info">—</div>
+    <div class="pager-right">
+      <label style="font-size:13px; color:var(--text-2); margin-right:6px;">На странице</label>
+      <select id="page-size-sel" onchange="changePageSize(this.value)" style="height:30px; border:1px solid var(--border-strong); border-radius:var(--radius); margin-right:14px;">
+        <option value="15">15</option><option value="30">30</option><option value="50">50</option><option value="100">100</option>
+      </select>
+      <div id="pager-buttons" style="display:inline-flex; gap:6px;"></div>
+      <input id="goto-page" type="number" min="1" style="width:52px; height:30px; margin-left:10px; border:1px solid var(--border-strong); border-radius:var(--radius); padding:0 6px; font-size:13px;" placeholder="№">
+      <button class="btn" style="height:30px; padding:0 10px;" onclick="gotoPage()">Перейти</button>
+    </div>
+  </div>
+
+  <div class="export-toast" id="export-toast"></div>
+
+  <div class="overlay" id="card-overlay" onclick="if(event.target===this) closeCard()">
+    <div class="card">
+      <div class="card-head">
+        <div><p class="card-title" id="card-phone">—</p><p class="card-sub" id="card-sub">—</p></div>
+        <button class="card-close" onclick="closeCard()">&times;</button>
+      </div>
+      <div class="card-body">
+        <div class="card-section">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <h3>Основные данные</h3>
+            <div class="col-picker-wrap">
+              <button class="btn btn-sm" onclick="toggleCardFieldPicker(event)" title="Настроить поля">⚙️ Поля</button>
+              <div class="col-picker" id="card-field-picker" style="right:0;">
+                <div class="col-picker-head">Отображение полей карточки</div>
+                <div class="col-picker-list" id="card-field-picker-list"></div>
+                <div class="col-picker-foot">
+                  <button class="btn" style="height:26px; padding:0 8px; font-size:12px;" onclick="resetCardFields()">Сбросить</button>
+                  <button class="btn btn-primary" style="height:26px; padding:0 10px; font-size:12px;" onclick="document.getElementById('card-field-picker').classList.remove('show'); openCard(currentCardId)">Готово</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="kv-grid" id="card-main"></div>
+        </div>
+        <div class="card-section"><h3>Анкета (call_form)</h3><div class="kv-grid" id="card-anketa"></div></div>
+        <div class="card-section"><h3>Таймлайн</h3><div class="timeline" id="card-timeline"></div></div>
+        <div class="card-section" id="card-recording-section" style="display:none;"><h3>Запись звонка</h3><span class="raw-link" id="card-recording-link"></span></div>
+        <div class="card-section" id="card-history-section" style="display:none;"><h3>Другие строки с этим номером</h3><div id="card-history"></div></div>
+        <div class="card-section">
+          <details>
+            <summary style="cursor:pointer; font-size:12px; text-transform:uppercase; letter-spacing:.03em; color:var(--text-2); font-weight:600; margin:0 0 10px;">Прочие поля (legacy_fields)</summary>
+            <div class="kv-grid" id="card-legacy" style="margin-top:10px;"></div>
+          </details>
+        </div>
+        <div class="card-section"><h3>Сырьё</h3><span class="raw-link" onclick="alert('В реальном сервисе — GET по syrye_key из S3')">Открыть исходный JSON из S3 →</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="assets/js/script.js"></script>
+</body>
+</html>
