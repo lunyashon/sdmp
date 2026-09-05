@@ -304,7 +304,7 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 	}()
 	go func() {
 		defer wg.Done()
-		if err := s.sendToSkorozvon(ctx, msg.LeadRowID, enrich.ChildSourceID, normalized, regionRaw, enrich.RegionID, resultDuplicate); err != nil {
+		if err := s.sendToSkorozvon(ctx, msg.LeadRowID, msg.LeadUUID, enrich.ChildSourceID, normalized, regionRaw, enrich.RegionID, resultDuplicate); err != nil {
 			s.log.Error("send skorozvon failed", "lead_id", msg.LeadRowID, "error", err)
 		}
 	}()
@@ -360,7 +360,7 @@ func (s *WorkerService) applySplit(ctx context.Context, sourceID int, tag string
 	return nil
 }
 
-func (s *WorkerService) sendToSkorozvon(ctx context.Context, leadID int64, childSourceID *int, phone, region string, regionID *int, duplicate bool) error {
+func (s *WorkerService) sendToSkorozvon(ctx context.Context, leadID int64, leadUUID string, childSourceID *int, phone, region string, regionID *int, duplicate bool) error {
 	if s.links == nil || s.skorozvon == nil {
 		return nil
 	}
@@ -386,19 +386,20 @@ func (s *WorkerService) sendToSkorozvon(ctx context.Context, leadID int64, child
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.sendOneSkorozvon(ctx, leadID, phone, region, link)
+			s.sendOneSkorozvon(ctx, leadID, leadUUID, phone, region, link)
 		}()
 	}
 	wg.Wait()
 	return nil
 }
 
-func (s *WorkerService) sendOneSkorozvon(ctx context.Context, leadID int64, phone, region string, link entity.SkorozvonLink) {
+func (s *WorkerService) sendOneSkorozvon(ctx context.Context, leadID int64, leadUUID, phone, region string, link entity.SkorozvonLink) {
 	res, attempts, err := s.postSkorozvon(ctx, port.SkorozvonLead{
-		ID:        leadID,
-		Phone:     phone,
-		ProjectID: link.ProjectID,
-		Region:    region,
+		ID:         leadID,
+		Phone:      phone,
+		ProjectID:  link.ProjectID,
+		Region:     region,
+		ExternalID: strings.TrimSpace(leadUUID),
 	})
 	ok := err == nil && res.LeadID > 0 && res.Status >= 200 && res.Status < 300
 	if !ok {
@@ -411,9 +412,25 @@ func (s *WorkerService) sendOneSkorozvon(ctx context.Context, leadID int64, phon
 			"error", err,
 			"body", string(res.Body),
 		)
+	}
+	if ok {
+		s.bindSkorozvon(ctx, leadID, strconv.Itoa(res.LeadID), strconv.FormatInt(link.ProjectID, 10))
+	}
+	s.saveSkorozvonDispatch(ctx, leadID, link.ProjectID, ok, res, attempts, err)
+}
+
+func (s *WorkerService) bindSkorozvon(ctx context.Context, leadID int64, skorozvonLeadID, projectID string) {
+	if s.leads == nil || leadID <= 0 {
 		return
 	}
-	s.saveSkorozvonDispatch(ctx, leadID, link.ProjectID, res, attempts)
+	if err := s.leads.BindSkorozvon(ctx, leadID, skorozvonLeadID, projectID); err != nil {
+		s.log.Error("bind skorozvon failed",
+			"lead_id", leadID,
+			"skorozvon_lead_id", skorozvonLeadID,
+			"project_id", projectID,
+			"error", err,
+		)
+	}
 }
 
 func (s *WorkerService) postSkorozvon(ctx context.Context, lead port.SkorozvonLead) (port.SkorozvonSendResult, int16, error) {
@@ -441,7 +458,7 @@ func (s *WorkerService) postSkorozvon(ctx context.Context, lead port.SkorozvonLe
 	return res, attempts, err
 }
 
-func (s *WorkerService) saveSkorozvonDispatch(ctx context.Context, leadID int64, projectID int64, res port.SkorozvonSendResult, attempts int16) {
+func (s *WorkerService) saveSkorozvonDispatch(ctx context.Context, leadID int64, projectID int64, ok bool, res port.SkorozvonSendResult, attempts int16, sendErr error) {
 	if s.leads == nil || leadID <= 0 {
 		return
 	}
@@ -449,13 +466,18 @@ func (s *WorkerService) saveSkorozvonDispatch(ctx context.Context, leadID int64,
 		LeadRowID:          leadID,
 		ChannelID:          entity.ChannelSkorozvon,
 		SkorozvonProjectID: strconv.FormatInt(projectID, 10),
-		ExternalID:         strconv.Itoa(res.LeadID),
-		SentOK:             true,
+		SentOK:             ok,
 		Attempts:           attempts,
 		RawResponse:        strings.TrimSpace(string(res.Body)),
 	}
+	if ok && res.LeadID > 0 {
+		in.ExternalID = strconv.Itoa(res.LeadID)
+	}
 	if res.Status > 0 {
 		in.HTTPStatus = &res.Status
+	}
+	if in.RawResponse == "" && sendErr != nil {
+		in.RawResponse = sendErr.Error()
 	}
 	if err := s.leads.InsertDispatch(ctx, in); err != nil {
 		s.log.Error("save skorozvon dispatch failed",
