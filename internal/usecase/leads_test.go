@@ -43,6 +43,12 @@ func (s *stubLeadList) CountZaryaBySource(context.Context, time.Time, time.Time)
 	return []entity.LeadZaryaStat{{SourceID: 7, Total: 15, Unique: 9, Dup: 6}}, s.err
 }
 
+func (s *stubLeadList) CountSkorozvonBitrixBySource(context.Context, time.Time, time.Time) ([]entity.LeadSkorozvonBitrixStat, error) {
+	return []entity.LeadSkorozvonBitrixStat{{
+		SourceID: 7, Updated: 20, UpdatedSent: 11, Created: 5, CreatedSent: 3,
+	}}, s.err
+}
+
 func (s *stubLeadList) Get(context.Context, int64) (entity.LeadDetail, error) {
 	return entity.LeadDetail{}, nil
 }
@@ -83,6 +89,18 @@ func (s *stubLeadList) InsertFromSkorozvon(context.Context, entity.LeadFromSkoro
 	return nil
 }
 
+func (s *stubLeadList) UpdateSkorozvonGeo(context.Context, string, entity.LeadFromSkorozvon) error {
+	return nil
+}
+
+func (s *stubLeadList) ReplaceSkorozvonAnketaFields(context.Context, string, []entity.SkorozvonAnketaField) error {
+	return nil
+}
+
+func (s *stubLeadList) EnqueueBx24(context.Context, string) error {
+	return nil
+}
+
 func TestFilterLeads(t *testing.T) {
 	created := time.Date(2026, 8, 27, 16, 27, 56, 0, time.Local)
 	repo := &stubLeadList{
@@ -108,6 +126,7 @@ func TestFilterLeads(t *testing.T) {
 		Operators:    []int{2, 3},
 		Zarya:        []string{"Чистый", "Дубль"},
 		Phone:        "8 (900) 987-65-39",
+		ViaUs:        boolPtr(false),
 		Limit:        0,
 	})
 	if err != nil {
@@ -124,6 +143,9 @@ func TestFilterLeads(t *testing.T) {
 	}
 	if len(repo.got.Regions) != 2 || len(repo.got.Operators) != 2 || len(repo.got.Zarya) != 2 || repo.got.Zarya[0] != "Чистый" {
 		t.Fatalf("filter %+v", repo.got)
+	}
+	if repo.got.ViaUs == nil || *repo.got.ViaUs {
+		t.Fatalf("via_us %+v", repo.got.ViaUs)
 	}
 }
 
@@ -172,6 +194,16 @@ func TestZaryaStats(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Unique != 9 || got[0].Dup != 6 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestSkorozvonBitrixStats(t *testing.T) {
+	got, err := NewLeadService(&stubLeadList{}, nil).SkorozvonBitrixStats(context.Background(), "2026-08-14", "2026-08-20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Updated != 20 || got[0].UpdatedSent != 11 || got[0].Created != 5 || got[0].CreatedSent != 3 {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -234,6 +266,9 @@ type stubCallResultRepo struct {
 	stubLeadList
 	gotID    string
 	got      entity.LeadCallResult
+	geo      *entity.LeadFromSkorozvon
+	fields   []entity.SkorozvonAnketaField
+	queued   string
 	inserted *entity.LeadFromSkorozvon
 	applyN   int
 	err      error
@@ -255,16 +290,33 @@ func (s *stubCallResultRepo) InsertFromSkorozvon(_ context.Context, in entity.Le
 	return nil
 }
 
+func (s *stubCallResultRepo) UpdateSkorozvonGeo(_ context.Context, _ string, in entity.LeadFromSkorozvon) error {
+	cp := in
+	s.geo = &cp
+	return nil
+}
+
+func (s *stubCallResultRepo) ReplaceSkorozvonAnketaFields(_ context.Context, _ string, fields []entity.SkorozvonAnketaField) error {
+	s.fields = append([]entity.SkorozvonAnketaField(nil), fields...)
+	return nil
+}
+
+func (s *stubCallResultRepo) EnqueueBx24(_ context.Context, skorozvonLeadID string) error {
+	s.queued = skorozvonLeadID
+	return nil
+}
+
 func TestApplyCallResult(t *testing.T) {
 	ended := time.Date(2019, 1, 30, 10, 6, 8, 0, time.UTC)
-	result := int32(54321)
+	result := int64(54321)
 	repo := &stubCallResultRepo{}
 	err := NewLeadService(repo, nil).ApplyCallResult(context.Background(), " 123456788 ", entity.LeadCallResult{
-		CallID:     "987654321",
-		CallURL:    "https://api.skorozvon.ru/api/calls/987654321.mp3",
-		CallLastAt: &ended,
-		CallResult: &result,
-		ProjectNum: "12345678",
+		CallID:         "987654321",
+		CallURL:        "https://api.skorozvon.ru/api/calls/987654321.mp3",
+		CallLastAt:     &ended,
+		CallResult:     &result,
+		CallResultName: "Результат звонка",
+		ProjectNum:     "12345678",
 	}, entity.LeadFromSkorozvon{})
 	if err != nil {
 		t.Fatal(err)
@@ -272,11 +324,35 @@ func TestApplyCallResult(t *testing.T) {
 	if repo.gotID != "123456788" {
 		t.Fatalf("id %q", repo.gotID)
 	}
-	if repo.got.CallID != "987654321" || repo.got.ProjectNum != "12345678" || repo.got.CallResult == nil || *repo.got.CallResult != 54321 {
+	if repo.got.CallID != "987654321" || repo.got.ProjectNum != "12345678" || repo.got.CallResult == nil || *repo.got.CallResult != 54321 || repo.got.CallResultName != "Результат звонка" {
 		t.Fatalf("%+v", repo.got)
 	}
 	if repo.inserted != nil {
 		t.Fatalf("unexpected insert %+v", repo.inserted)
+	}
+	if repo.queued != "" {
+		t.Fatalf("queued %q", repo.queued)
+	}
+}
+
+func TestApplyCallResultQueuesBx24WhenTransferred(t *testing.T) {
+	repo := &stubCallResultRepo{}
+	err := NewLeadService(repo, nil).ApplyCallResult(context.Background(), "51038587780", entity.LeadCallResult{
+		CallID:         "1",
+		CallResultName: " Передан лид ",
+	}, entity.LeadFromSkorozvon{
+		CustomFields: []entity.SkorozvonCustomValue{
+			{FieldID: 50000009440, Raw: []byte(`[50000014691]`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.queued != "51038587780" {
+		t.Fatalf("queued %q", repo.queued)
+	}
+	if len(repo.fields) != 1 || repo.fields[0].FieldID != 50000009440 || repo.fields[0].EnumID != 50000014691 {
+		t.Fatalf("fields %+v", repo.fields)
 	}
 }
 
@@ -302,12 +378,19 @@ func TestApplyFormResponse(t *testing.T) {
 		FormName: "Анкета",
 		FormID:   &formID,
 		Answers:  []entity.SkorozvonAnketaAnswer{{QuestionName: "Город", AnswerValues: []string{"Екатеринбург"}}},
-	}, entity.LeadFromSkorozvon{})
+	}, entity.LeadFromSkorozvon{
+		CustomFields: []entity.SkorozvonCustomValue{
+			{FieldID: 50000011777, Raw: []byte(`[50000004560]`)},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if repo.gotID != "123456788" || repo.got.FormName != "Анкета" || len(repo.got.Answers) != 1 {
 		t.Fatalf("%q %+v", repo.gotID, repo.got)
+	}
+	if len(repo.fields) != 1 || repo.fields[0].FieldID != 50000011777 || repo.fields[0].EnumID != 50000004560 {
+		t.Fatalf("fields %+v", repo.fields)
 	}
 }
 
@@ -326,6 +409,7 @@ type stubFormResponseRepo struct {
 	stubLeadList
 	gotID    string
 	got      entity.LeadFormResponse
+	fields   []entity.SkorozvonAnketaField
 	inserted *entity.LeadFromSkorozvon
 	applyN   int
 	err      error
@@ -344,6 +428,11 @@ func (s *stubFormResponseRepo) ApplyFormResponse(_ context.Context, skorozvonLea
 func (s *stubFormResponseRepo) InsertFromSkorozvon(_ context.Context, in entity.LeadFromSkorozvon) error {
 	cp := in
 	s.inserted = &cp
+	return nil
+}
+
+func (s *stubFormResponseRepo) ReplaceSkorozvonAnketaFields(_ context.Context, _ string, fields []entity.SkorozvonAnketaField) error {
+	s.fields = append([]entity.SkorozvonAnketaField(nil), fields...)
 	return nil
 }
 
@@ -401,6 +490,8 @@ func TestResendPartnerPostsLeadDataAndWritesDispatch(t *testing.T) {
 		t.Fatalf("dispatch %+v", leads.dispatch)
 	}
 }
+
+func boolPtr(v bool) *bool { return &v }
 
 func TestResendPartnerRequiresWebhook(t *testing.T) {
 	leads := &stubLeadGet{detail: entity.LeadDetail{ID: 7, Phone: "79001234567"}}

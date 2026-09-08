@@ -15,6 +15,7 @@ import (
 
 type DictAPI interface {
 	ListRegions(ctx context.Context) ([]entity.NamedRef, error)
+	ListStatuses(ctx context.Context) ([]entity.NamedRef, error)
 	ListOperatorGroups(ctx context.Context) ([]entity.OperatorGroup, error)
 	AddOperatorAlias(ctx context.Context, operatorID int, alias string) error
 	RemoveOperatorAlias(ctx context.Context, operatorID int, alias string) error
@@ -34,6 +35,15 @@ func NewDictsHandler(svc DictAPI, log *slog.Logger) *DictsHandler {
 
 func (h *DictsHandler) Regions(c *gin.Context) {
 	items, err := h.svc.ListRegions(c.Request.Context())
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	response.List(c, items)
+}
+
+func (h *DictsHandler) Statuses(c *gin.Context) {
+	items, err := h.svc.ListStatuses(c.Request.Context())
 	if err != nil {
 		response.HandleError(c, h.log, err)
 		return

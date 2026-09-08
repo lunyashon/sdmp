@@ -32,6 +32,10 @@ func (r *DictRepo) ListOperators(ctx context.Context) ([]entity.NamedRef, error)
 	return r.listNamed(ctx, `SELECT id, name FROM operator ORDER BY id`)
 }
 
+func (r *DictRepo) ListStatuses(ctx context.Context) ([]entity.NamedRef, error) {
+	return r.listNamed(ctx, `SELECT id, name FROM status ORDER BY id`)
+}
+
 func (r *DictRepo) ResolveRegion(ctx context.Context, alias string) (int, bool, error) {
 	alias = strings.TrimSpace(alias)
 	if alias == "" {

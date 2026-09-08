@@ -74,3 +74,33 @@ func TestLeadAddPayloadFromAnketa(t *testing.T) {
 		t.Fatalf("comments %q", got.Fields["COMMENTS"])
 	}
 }
+
+func TestLeadAddPayloadFromAnketaFields(t *testing.T) {
+	raw, err := LeadAddPayload(entity.LeadDetail{
+		UUID:   "u1",
+		Phone:  "79001112233",
+		Region: "Краснодарский край",
+		City:   "Краснодар",
+		AnketaFields: []entity.SkorozvonAnketaFieldItem{
+			{FieldID: 50000011778, FieldName: "Вид долга", EnumID: 1, EnumName: "Потребительские кредиты"},
+			{FieldID: 50000011778, FieldName: "Вид долга", EnumID: 2, EnumName: "Автокредит (нет автомобиля)"},
+			{FieldID: 50000009440, FieldName: "Сумма долга", EnumID: 3, EnumName: "Более 500 тыс."},
+			{FieldID: 50000011779, FieldName: "Имущество", EnumID: 4, EnumName: "Нет"},
+			{FieldID: 50000016217, FieldName: "Доход", EnumID: 5, EnumName: "Официальный"},
+			{FieldID: 50000007333, FieldName: "ФИО", EnumID: 6, EnumName: "Иван"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Fields map[string]any `json:"fields"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := "Имя клиента - Иван\nРегион - Краснодарский край\nГород - Краснодар\nСумма долга - Более 500 тыс.\nВид долга - Потребительские кредиты, Автокредит (нет автомобиля)\nИмущество - Нет\nДоход - Официальный\n"
+	if got.Fields["COMMENTS"] != want {
+		t.Fatalf("comments %q", got.Fields["COMMENTS"])
+	}
+}

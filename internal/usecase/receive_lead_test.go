@@ -150,6 +150,10 @@ func (s *stubLeadRepo) CountZaryaBySource(context.Context, time.Time, time.Time)
 	return nil, nil
 }
 
+func (s *stubLeadRepo) CountSkorozvonBitrixBySource(context.Context, time.Time, time.Time) ([]entity.LeadSkorozvonBitrixStat, error) {
+	return nil, nil
+}
+
 func (s *stubLeadRepo) Get(context.Context, int64) (entity.LeadDetail, error) {
 	return entity.LeadDetail{}, nil
 }
@@ -187,6 +191,18 @@ func (s *stubLeadRepo) ApplyFormResponse(context.Context, string, entity.LeadFor
 }
 
 func (s *stubLeadRepo) InsertFromSkorozvon(context.Context, entity.LeadFromSkorozvon) error {
+	return nil
+}
+
+func (s *stubLeadRepo) UpdateSkorozvonGeo(context.Context, string, entity.LeadFromSkorozvon) error {
+	return nil
+}
+
+func (s *stubLeadRepo) ReplaceSkorozvonAnketaFields(context.Context, string, []entity.SkorozvonAnketaField) error {
+	return nil
+}
+
+func (s *stubLeadRepo) EnqueueBx24(context.Context, string) error {
 	return nil
 }
 

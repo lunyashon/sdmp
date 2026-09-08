@@ -42,27 +42,30 @@ func NewSkorozvonEventsHandler(svc SkorozvonEventAPI, log *slog.Logger) *Skorozv
 }
 
 type skorozvonLead struct {
-	ID        json.RawMessage `json:"id"`
-	Name      string          `json:"name"`
-	City      string          `json:"city"`
-	Phones    json.RawMessage `json:"phones"`
-	Emails    json.RawMessage `json:"emails"`
-	Tags      json.RawMessage `json:"tags"`
-	Comment   string          `json:"comment"`
-	CreatedAt string          `json:"created_at"`
+	ID           json.RawMessage `json:"id"`
+	Name         string          `json:"name"`
+	City         string          `json:"city"`
+	Phones       json.RawMessage `json:"phones"`
+	LeadPhones   json.RawMessage `json:"lead_phones"`
+	Emails       json.RawMessage `json:"emails"`
+	Tags         json.RawMessage `json:"tags"`
+	Comment      string          `json:"comment"`
+	CreatedAt    string          `json:"created_at"`
+	CustomFields json.RawMessage `json:"custom_fields"`
 }
 
 type skorozvonEventEnvelope struct {
 	Type    string        `json:"type"`
 	Lead    skorozvonLead `json:"lead"`
 	Contact skorozvonLead `json:"contact"`
-	Call struct {
+	Call    struct {
 		ID            json.RawMessage `json:"id"`
 		RecordingURL  string          `json:"recording_url"`
 		EndedAt       string          `json:"ended_at"`
 		CallProjectID json.RawMessage `json:"call_project_id"`
 		ResultID      json.RawMessage `json:"result_id"`
 		Phone         string          `json:"phone"`
+		Region        string          `json:"region"`
 	} `json:"call"`
 	CallResult struct {
 		ResultID   json.RawMessage `json:"result_id"`
@@ -123,11 +126,12 @@ func (h *SkorozvonEventsHandler) Receive(c *gin.Context) {
 func (h *SkorozvonEventsHandler) applyCallResult(c *gin.Context, ev skorozvonEventEnvelope) {
 	leadID := jsonScalar(ev.Lead.ID)
 	in := entity.LeadCallResult{
-		CallID:     jsonScalar(ev.Call.ID),
-		CallURL:    strings.TrimSpace(ev.Call.RecordingURL),
-		CallLastAt: parseSkorozvonTime(ev.Call.EndedAt),
-		CallResult: parseInt32ID(jsonScalar(ev.CallResult.ResultID), jsonScalar(ev.Call.ResultID)),
-		ProjectNum: jsonScalar(ev.Call.CallProjectID),
+		CallID:         jsonScalar(ev.Call.ID),
+		CallURL:        strings.TrimSpace(ev.Call.RecordingURL),
+		CallLastAt:     parseSkorozvonTime(ev.Call.EndedAt),
+		CallResult:     parseInt64ID(jsonScalar(ev.CallResult.ResultID), jsonScalar(ev.Call.ResultID)),
+		CallResultName: strings.TrimSpace(ev.CallResult.ResultName),
+		ProjectNum:     jsonScalar(ev.Call.CallProjectID),
 	}
 	if err := h.svc.ApplyCallResult(c.Request.Context(), leadID, in, leadSnapshot(ev)); err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
@@ -176,7 +180,13 @@ func (h *SkorozvonEventsHandler) applyFormResponse(c *gin.Context, ev skorozvonE
 func leadSnapshot(ev skorozvonEventEnvelope) entity.LeadFromSkorozvon {
 	phone := firstPhone(ev.Lead.Phones)
 	if phone == "" {
+		phone = firstPhone(ev.Lead.LeadPhones)
+	}
+	if phone == "" {
 		phone = firstPhone(ev.Contact.Phones)
+	}
+	if phone == "" {
+		phone = firstPhone(ev.Contact.LeadPhones)
 	}
 	if phone == "" {
 		phone = strings.TrimSpace(ev.Call.Phone)
@@ -186,11 +196,13 @@ func leadSnapshot(ev skorozvonEventEnvelope) entity.LeadFromSkorozvon {
 		created = *t
 	}
 	return entity.LeadFromSkorozvon{
-		Phone:     phone,
-		City:      firstNonEmpty(ev.Lead.City, ev.Contact.City),
-		Tag:       firstNonEmpty(firstString(ev.Lead.Tags), firstString(ev.Contact.Tags)),
-		LegacyRaw: skorozvonLegacyJSON(ev),
-		CreatedAt: created,
+		Phone:        phone,
+		City:         firstNonEmpty(ev.Lead.City, ev.Contact.City),
+		Region:       strings.TrimSpace(ev.Call.Region),
+		Tag:          firstNonEmpty(firstString(ev.Lead.Tags), firstString(ev.Contact.Tags)),
+		LegacyRaw:    skorozvonLegacyJSON(ev),
+		CreatedAt:    created,
+		CustomFields: mergeCustomFields(ev.Lead.CustomFields, ev.Contact.CustomFields),
 	}
 }
 
@@ -201,6 +213,48 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+func mergeCustomFields(blobs ...json.RawMessage) []entity.SkorozvonCustomValue {
+	byID := map[int64]entity.SkorozvonCustomValue{}
+	order := make([]int64, 0)
+	for _, blob := range blobs {
+		blob = bytes.TrimSpace(blob)
+		if len(blob) == 0 || string(blob) == "null" {
+			continue
+		}
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(blob, &obj); err != nil {
+			continue
+		}
+		for key, raw := range obj {
+			id := parseCustomFieldID(key)
+			if id == 0 {
+				continue
+			}
+			if _, exists := byID[id]; !exists {
+				order = append(order, id)
+			}
+			byID[id] = entity.SkorozvonCustomValue{FieldID: id, Raw: append([]byte(nil), raw...)}
+		}
+	}
+	out := make([]entity.SkorozvonCustomValue, 0, len(order))
+	for _, id := range order {
+		out = append(out, byID[id])
+	}
+	return out
+}
+
+func parseCustomFieldID(key string) int64 {
+	key = strings.TrimSpace(key)
+	if len(key) < 7 || !strings.EqualFold(key[:6], "FIELD_") {
+		return 0
+	}
+	n, err := strconv.ParseInt(key[6:], 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 func skorozvonLegacyJSON(ev skorozvonEventEnvelope) string {
@@ -366,17 +420,17 @@ func parseInt64Ptr(raw string) *int64 {
 	return &n
 }
 
-func parseInt32ID(vals ...string) *int32 {
+func parseInt64ID(vals ...string) *int64 {
 	for _, raw := range vals {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
 		}
-		n, err := strconv.ParseInt(raw, 10, 32)
+		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			continue
 		}
-		v := int32(n)
+		v := n
 		return &v
 	}
 	return nil
@@ -387,7 +441,7 @@ func parseSkorozvonTime(raw string) *time.Time {
 	if raw == "" {
 		return nil
 	}
-	for _, layout := range []string{usecase.LeadDateLayout, "2006-01-02 15:04:05", time.RFC3339} {
+	for _, layout := range []string{usecase.LeadDateLayout, "2006-01-02 15:04:05", time.RFC3339Nano, time.RFC3339} {
 		if t, err := time.ParseInLocation(layout, raw, clock.Location); err == nil {
 			return &t
 		}

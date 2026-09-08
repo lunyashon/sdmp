@@ -73,7 +73,8 @@ type LeadDTO struct {
 	Operator          string `json:"operator"`
 	StatusID          int16  `json:"status_id"`
 	Stage             string `json:"stage"`
-	CallResult        *int32 `json:"call_result"`
+	CallResult        *int64 `json:"call_result"`
+	CallResultName    string `json:"call_result_name"`
 	UPK               string `json:"upk"`
 	Phone             string `json:"phone"`
 	Zarya             string `json:"zarya"`
@@ -82,6 +83,7 @@ type LeadDTO struct {
 	ProjectNum        string `json:"project_num"`
 	CallID            string `json:"call_id"`
 	CallURL           string `json:"call_url"`
+	ViaUs             bool   `json:"via_us"`
 }
 
 type LeadsQuery struct {
@@ -97,7 +99,8 @@ type LeadsQuery struct {
 	Phone        string
 	City         string
 	Tag          string
-	CallResult   *int32
+	CallResult   *int64
+	ViaUs        *bool
 	Limit        int
 	Offset       int
 }
@@ -126,6 +129,7 @@ func NewLeadDTO(l entity.LeadListItem) LeadDTO {
 		StatusID:          l.StatusID,
 		Stage:             l.Stage,
 		CallResult:        l.CallResult,
+		CallResultName:    l.CallResultName,
 		UPK:               l.UPK,
 		Phone:             l.Phone,
 		Zarya:             l.Zarya,
@@ -134,34 +138,39 @@ func NewLeadDTO(l entity.LeadListItem) LeadDTO {
 		ProjectNum:        l.ProjectNum,
 		CallID:            l.CallID,
 		CallURL:           l.CallURL,
+		ViaUs:             l.ViaUs,
 	}
 }
 
 func ParseLeadsQuery(q url.Values) (LeadsQuery, error) {
 	out := LeadsQuery{
-		DateFrom:   strings.TrimSpace(q.Get("date_from")),
-		DateTo:     strings.TrimSpace(q.Get("date_to")),
+		DateFrom:     strings.TrimSpace(q.Get("date_from")),
+		DateTo:       strings.TrimSpace(q.Get("date_to")),
 		Sources:      queryInts(q, "sources"),
 		ChildSources: queryInts(q, "child_sources"),
 		ColdLabels:   queryStrings(q, "cold_label"),
-		Regions:    queryInts(q, "region"),
-		Operators:  queryInts(q, "operator"),
-		Statuses:   queryInts(q, "status"),
-		Zarya:      queryStrings(q, "zarya"),
-		Phone:      strings.TrimSpace(q.Get("phone")),
-		City:       strings.TrimSpace(q.Get("city")),
-		Tag:        strings.TrimSpace(q.Get("tag")),
-		Limit:      10,
-		Offset:     0,
+		Regions:      queryInts(q, "region"),
+		Operators:    queryInts(q, "operator"),
+		Statuses:     queryInts(q, "status"),
+		Zarya:        queryStrings(q, "zarya"),
+		Phone:        strings.TrimSpace(q.Get("phone")),
+		City:         strings.TrimSpace(q.Get("city")),
+		Tag:          strings.TrimSpace(q.Get("tag")),
+		Limit:        10,
+		Offset:       0,
 	}
 	if raw := strings.TrimSpace(q.Get("call_result")); raw != "" {
-		n, err := strconv.Atoi(raw)
+		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			return LeadsQuery{}, fmt.Errorf("call_result must be int")
 		}
-		v := int32(n)
-		out.CallResult = &v
+		out.CallResult = &n
 	}
+	viaUs, err := queryBool(q.Get("via_us"))
+	if err != nil {
+		return LeadsQuery{}, err
+	}
+	out.ViaUs = viaUs
 	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil {
@@ -195,6 +204,21 @@ func queryStrings(q url.Values, key string) []string {
 		}
 	}
 	return out
+}
+
+func queryBool(raw string) (*bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return nil, nil
+	case "1", "true", "t", "yes":
+		v := true
+		return &v, nil
+	case "0", "false", "f", "no":
+		v := false
+		return &v, nil
+	default:
+		return nil, fmt.Errorf("via_us must be bool")
+	}
 }
 
 func queryInts(q url.Values, key string) []int {
@@ -267,47 +291,49 @@ type LeadPhoneHistoryDTO struct {
 }
 
 type LeadDetailDTO struct {
-	ID                int64                 `json:"id"`
-	UUID              string                `json:"uuid"`
-	Phone             string                `json:"phone"`
-	PhoneValid        bool                  `json:"phone_valid"`
-	ViaUs             bool                  `json:"via_us"`
-	SourceID          *int                  `json:"source_id"`
-	Source            string                `json:"source"`
-	ChildSourceID     *int                  `json:"child_source_id"`
-	ChildSource       string                `json:"child_source"`
-	ColdLabel         string                `json:"cold_label"`
-	BaseLabel         string                `json:"base_label"`
-	RegionID          *int                  `json:"region_id"`
-	Region            string                `json:"region"`
-	RegionSource      *int16                `json:"region_source"`
-	City              string                `json:"city"`
-	OperatorID        *int                  `json:"operator_id"`
-	Operator          string                `json:"operator"`
-	OperatorSource    *int16                `json:"operator_source"`
-	WebID             string                `json:"web_id"`
-	Tag               string                `json:"tag"`
-	CallResult        *int32                `json:"call_result"`
-	CallID            string                `json:"call_id"`
-	CallURL           string                `json:"call_url"`
-	CallLastAt        string                `json:"call_last_at,omitempty"`
-	ProjectNum        string                `json:"project_num"`
-	CallForm          any                   `json:"call_form"`
-	StatusID          int16                 `json:"status_id"`
-	Stage             string                `json:"stage"`
-	S3Key             string                `json:"s3_key"`
-	LegacyFields      any                   `json:"legacy_fields"`
-	BitrixLeadID      string                `json:"bitrix_lead_id"`
-	SourceDescription string                `json:"source_description"`
-	ArchivedAt        string                `json:"archived_at,omitempty"`
-	CreatedAt         string                `json:"created_at"`
-	UpdatedAt         string                `json:"updated_at,omitempty"`
-	Zarya             string                `json:"zarya"`
-	UPK               string                `json:"upk"`
-	Events            []LeadEventDTO        `json:"events"`
-	Dispatches        []LeadDispatchDTO     `json:"dispatches"`
-	PhoneHistory      []LeadPhoneHistoryDTO `json:"phone_history"`
-	SkorozvonAnketa   *SkorozvonAnketaDTO   `json:"skorozvon_anketa"`
+	ID                    int64                     `json:"id"`
+	UUID                  string                    `json:"uuid"`
+	Phone                 string                    `json:"phone"`
+	PhoneValid            bool                      `json:"phone_valid"`
+	ViaUs                 bool                      `json:"via_us"`
+	SourceID              *int                      `json:"source_id"`
+	Source                string                    `json:"source"`
+	ChildSourceID         *int                      `json:"child_source_id"`
+	ChildSource           string                    `json:"child_source"`
+	ColdLabel             string                    `json:"cold_label"`
+	BaseLabel             string                    `json:"base_label"`
+	RegionID              *int                      `json:"region_id"`
+	Region                string                    `json:"region"`
+	RegionSource          *int16                    `json:"region_source"`
+	City                  string                    `json:"city"`
+	OperatorID            *int                      `json:"operator_id"`
+	Operator              string                    `json:"operator"`
+	OperatorSource        *int16                    `json:"operator_source"`
+	WebID                 string                    `json:"web_id"`
+	Tag                   string                    `json:"tag"`
+	CallResult            *int64                    `json:"call_result"`
+	CallResultName        string                    `json:"call_result_name"`
+	CallID                string                    `json:"call_id"`
+	CallURL               string                    `json:"call_url"`
+	CallLastAt            string                    `json:"call_last_at,omitempty"`
+	ProjectNum            string                    `json:"project_num"`
+	CallForm              any                       `json:"call_form"`
+	StatusID              int16                     `json:"status_id"`
+	Stage                 string                    `json:"stage"`
+	S3Key                 string                    `json:"s3_key"`
+	LegacyFields          any                       `json:"legacy_fields"`
+	BitrixLeadID          string                    `json:"bitrix_lead_id"`
+	SourceDescription     string                    `json:"source_description"`
+	ArchivedAt            string                    `json:"archived_at,omitempty"`
+	CreatedAt             string                    `json:"created_at"`
+	UpdatedAt             string                    `json:"updated_at,omitempty"`
+	Zarya                 string                    `json:"zarya"`
+	UPK                   string                    `json:"upk"`
+	Events                []LeadEventDTO            `json:"events"`
+	Dispatches            []LeadDispatchDTO         `json:"dispatches"`
+	PhoneHistory          []LeadPhoneHistoryDTO     `json:"phone_history"`
+	SkorozvonAnketa       *SkorozvonAnketaDTO       `json:"skorozvon_anketa"`
+	SkorozvonAnketaFields []SkorozvonAnketaFieldDTO `json:"skorozvon_anketa_fields"`
 }
 
 type SkorozvonAnketaAnswerDTO struct {
@@ -326,6 +352,12 @@ type SkorozvonAnketaDTO struct {
 	CallID     string                     `json:"call_id"`
 	UpdatedAt  string                     `json:"updated_at,omitempty"`
 	Answers    []SkorozvonAnketaAnswerDTO `json:"answers"`
+}
+
+type SkorozvonAnketaFieldDTO struct {
+	FieldID int64    `json:"field_id"`
+	Name    string   `json:"name"`
+	Values  []string `json:"values"`
 }
 
 type LeadDetailResponse struct {
@@ -371,47 +403,49 @@ func NewLeadDetailDTO(l entity.LeadDetail) LeadDetailDTO {
 		})
 	}
 	return LeadDetailDTO{
-		ID:                l.ID,
-		UUID:              l.UUID,
-		Phone:             l.Phone,
-		PhoneValid:        l.PhoneValid,
-		ViaUs:             l.ViaUs,
-		SourceID:          l.SourceID,
-		Source:            l.Source,
-		ChildSourceID:     l.ChildSourceID,
-		ChildSource:       l.ChildSource,
-		ColdLabel:         l.ColdLabel,
-		BaseLabel:         l.BaseLabel,
-		RegionID:          l.RegionID,
-		Region:            l.Region,
-		RegionSource:      l.RegionSource,
-		City:              l.City,
-		OperatorID:        l.OperatorID,
-		Operator:          l.Operator,
-		OperatorSource:    l.OperatorSource,
-		WebID:             l.WebID,
-		Tag:               l.Tag,
-		CallResult:        l.CallResult,
-		CallID:            l.CallID,
-		CallURL:           l.CallURL,
-		CallLastAt:        formatLeadTimePtr(l.CallLastAt),
-		ProjectNum:        l.ProjectNum,
-		CallForm:          parseStoredJSON(l.CallFormRaw),
-		StatusID:          l.StatusID,
-		Stage:             l.Stage,
-		S3Key:             l.S3Key,
-		LegacyFields:      parseStoredJSON(l.LegacyRaw),
-		BitrixLeadID:      l.BitrixLeadID,
-		SourceDescription: l.SourceDescription,
-		ArchivedAt:        formatLeadTimePtr(l.ArchivedAt),
-		CreatedAt:         formatLeadTime(l.CreatedAt),
-		UpdatedAt:         formatLeadTimePtr(l.UpdatedAt),
-		Zarya:             l.Zarya,
-		UPK:               l.UPK,
-		Events:            events,
-		Dispatches:        dispatches,
-		PhoneHistory:      history,
-		SkorozvonAnketa:   newSkorozvonAnketaDTO(l.Anketa),
+		ID:                    l.ID,
+		UUID:                  l.UUID,
+		Phone:                 l.Phone,
+		PhoneValid:            l.PhoneValid,
+		ViaUs:                 l.ViaUs,
+		SourceID:              l.SourceID,
+		Source:                l.Source,
+		ChildSourceID:         l.ChildSourceID,
+		ChildSource:           l.ChildSource,
+		ColdLabel:             l.ColdLabel,
+		BaseLabel:             l.BaseLabel,
+		RegionID:              l.RegionID,
+		Region:                l.Region,
+		RegionSource:          l.RegionSource,
+		City:                  l.City,
+		OperatorID:            l.OperatorID,
+		Operator:              l.Operator,
+		OperatorSource:        l.OperatorSource,
+		WebID:                 l.WebID,
+		Tag:                   l.Tag,
+		CallResult:            l.CallResult,
+		CallResultName:        l.CallResultName,
+		CallID:                l.CallID,
+		CallURL:               l.CallURL,
+		CallLastAt:            formatLeadTimePtr(l.CallLastAt),
+		ProjectNum:            l.ProjectNum,
+		CallForm:              parseStoredJSON(l.CallFormRaw),
+		StatusID:              l.StatusID,
+		Stage:                 l.Stage,
+		S3Key:                 l.S3Key,
+		LegacyFields:          parseStoredJSON(l.LegacyRaw),
+		BitrixLeadID:          l.BitrixLeadID,
+		SourceDescription:     l.SourceDescription,
+		ArchivedAt:            formatLeadTimePtr(l.ArchivedAt),
+		CreatedAt:             formatLeadTime(l.CreatedAt),
+		UpdatedAt:             formatLeadTimePtr(l.UpdatedAt),
+		Zarya:                 l.Zarya,
+		UPK:                   l.UPK,
+		Events:                events,
+		Dispatches:            dispatches,
+		PhoneHistory:          history,
+		SkorozvonAnketa:       newSkorozvonAnketaDTO(l.Anketa),
+		SkorozvonAnketaFields: newSkorozvonAnketaFieldsDTO(l.AnketaFields),
 	}
 }
 
@@ -442,4 +476,31 @@ func newSkorozvonAnketaDTO(a *entity.SkorozvonAnketa) *SkorozvonAnketaDTO {
 		UpdatedAt:  formatLeadTimePtr(a.UpdatedAt),
 		Answers:    answers,
 	}
+}
+
+func newSkorozvonAnketaFieldsDTO(rows []entity.SkorozvonAnketaFieldItem) []SkorozvonAnketaFieldDTO {
+	out := make([]SkorozvonAnketaFieldDTO, 0)
+	idx := make(map[int64]int, len(rows))
+	for _, r := range rows {
+		name := strings.TrimSpace(r.FieldName)
+		if name == "" {
+			name = fmt.Sprintf("FIELD_%d", r.FieldID)
+		}
+		val := strings.TrimSpace(r.EnumName)
+		if val == "" {
+			val = strconv.FormatInt(r.EnumID, 10)
+		}
+		i, ok := idx[r.FieldID]
+		if !ok {
+			idx[r.FieldID] = len(out)
+			out = append(out, SkorozvonAnketaFieldDTO{
+				FieldID: r.FieldID,
+				Name:    name,
+				Values:  []string{val},
+			})
+			continue
+		}
+		out[i].Values = append(out[i].Values, val)
+	}
+	return out
 }

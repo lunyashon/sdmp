@@ -77,6 +77,7 @@ func RunWorker() error {
 		log,
 		cfg.Gomaxprocs,
 	).WithSkorozvon(postgres.NewSkorozvonLinkRepo(pool), skorozvonClient).
+		WithSkorozvonMaps(postgres.NewSkorozvonMapRepo(pool)).
 		WithOutboxBx24(postgres.NewOutboxBx24Repo(pool)).
 		WithBx24(crm.New(cfg.SodatechBx24URL, http.DefaultClient))
 

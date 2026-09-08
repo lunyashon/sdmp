@@ -85,14 +85,15 @@ func TestReceiveCallResultAppliesFields(t *testing.T) {
 	svc := &stubCallResultAPI{}
 	body := `{
 		"type": "call_result",
-		"lead": {"id": 123456788, "name": "Иван", "city": "Москва", "phones": "+79001234567", "tags": ["тест"]},
+		"lead": {"id": 123456788, "name": "Иван", "city": "Москва", "phones": "+79001234567", "tags": ["тест"], "custom_fields": {"FIELD_50000009406": [50000015671], "FIELD_50000011777": [50000004560]}},
 		"contact": {"id": 123456789, "phones": "+79000000001"},
 		"call": {
 			"id": 987654321,
 			"ended_at": "30.01.2019 10:06:08",
 			"recording_url": "https://api.skorozvon.ru/api/calls/987654321.mp3",
 			"call_project_id": "12345678",
-			"result_id": 111
+			"result_id": 111,
+			"region": "Москва и Московская область"
 		},
 		"call_result": {"result_id": 54321, "result_name": "Результат звонка"}
 	}`
@@ -112,11 +113,24 @@ func TestReceiveCallResultAppliesFields(t *testing.T) {
 	if svc.got.CallResult == nil || *svc.got.CallResult != 54321 {
 		t.Fatalf("call_result %+v", svc.got.CallResult)
 	}
+	if svc.got.CallResultName != "Результат звонка" {
+		t.Fatalf("result_name %q", svc.got.CallResultName)
+	}
 	if svc.got.CallLastAt == nil || svc.got.CallLastAt.In(clock.Location).Format("02.01.2006 15:04:05") != "30.01.2019 10:06:08" {
 		t.Fatalf("ended %+v", svc.got.CallLastAt)
 	}
 	if svc.gotSnap.Phone != "+79001234567" || svc.gotSnap.City != "Москва" || svc.gotSnap.Tag != "тест" {
 		t.Fatalf("snap %+v", svc.gotSnap)
+	}
+	if svc.gotSnap.Region != "Москва и Московская область" {
+		t.Fatalf("region %q", svc.gotSnap.Region)
+	}
+	gotFields := map[int64]string{}
+	for _, f := range svc.gotSnap.CustomFields {
+		gotFields[f.FieldID] = string(f.Raw)
+	}
+	if gotFields[50000009406] != "[50000015671]" || gotFields[50000011777] != "[50000004560]" {
+		t.Fatalf("custom_fields %+v", svc.gotSnap.CustomFields)
 	}
 	if !strings.Contains(svc.gotSnap.LegacyRaw, `"name":"Иван"`) {
 		t.Fatalf("legacy %s", svc.gotSnap.LegacyRaw)
@@ -214,5 +228,49 @@ func TestReceiveCallResultUnknownLeadOK(t *testing.T) {
 	skorozvonEventsRouter(svc).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+func TestReceiveCallResultParsesNameAndLargeResultID(t *testing.T) {
+	svc := &stubCallResultAPI{}
+	body := `{
+		"type": "call_result",
+		"lead": {
+			"id": 51038587780,
+			"city": null,
+			"phones": "+79277363936",
+			"lead_phones": ["+7 (927) 736-39-36"],
+			"tags": ["ВР Другие"],
+			"custom_fields": {"FIELD_50000011777": [50000004578]}
+		},
+		"call": {
+			"id": 51590794835,
+			"phone": "+79277363936",
+			"ended_at": "2026-09-08T13:20:32.000+04:00",
+			"result_id": 50000228189,
+			"region": "Самарская область"
+		},
+		"call_result": {"result_id": 50000228189, "result_name": "Передан лид"}
+	}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/skorozvon/events", strings.NewReader(body))
+	skorozvonEventsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if svc.gotID != "51038587780" {
+		t.Fatalf("id %q", svc.gotID)
+	}
+	if svc.got.CallResultName != "Передан лид" {
+		t.Fatalf("result_name %q", svc.got.CallResultName)
+	}
+	if svc.got.CallResult == nil || *svc.got.CallResult != 50000228189 {
+		t.Fatalf("call_result %+v", svc.got.CallResult)
+	}
+	if svc.gotSnap.Phone != "+79277363936" || svc.gotSnap.Region != "Самарская область" {
+		t.Fatalf("snap %+v", svc.gotSnap)
+	}
+	if svc.got.CallLastAt == nil {
+		t.Fatal("ended_at")
 	}
 }

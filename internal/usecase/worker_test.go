@@ -153,6 +153,10 @@ func TestProcessBx24AddsWhenMissing(t *testing.T) {
 		Region:   "Москва",
 		City:     "Химки",
 		Operator: "БИЛАЙН",
+		AnketaFields: []entity.SkorozvonAnketaFieldItem{
+			{FieldName: "Сумма долга", EnumName: "Более 500 тыс."},
+			{FieldName: "Вид долга", EnumName: "Потребительские кредиты"},
+		},
 	}}
 	api := &stubBx24{id: 0, raw: []byte(`{"result":0}`), addID: 77, addRaw: []byte(`{"result":77}`)}
 	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
@@ -166,7 +170,7 @@ func TestProcessBx24AddsWhenMissing(t *testing.T) {
 	if len(api.payload) == 0 {
 		t.Fatal("add not called")
 	}
-	if string(api.payload) == "" || !containsAll(string(api.payload), "79001234567", "UF_CRM_1788705605", "lead-aaa", "Москва", "Химки", "БИЛАЙН") {
+	if string(api.payload) == "" || !containsAll(string(api.payload), "79001234567", "UF_CRM_1788705605", "lead-aaa", "Москва", "Химки", "БИЛАЙН", "Более 500 тыс.", "Потребительские кредиты") {
 		t.Fatalf("payload %s", api.payload)
 	}
 	if len(leads.bitrixBinds) != 1 || leads.bitrixBinds[0] != [2]string{"lead-aaa", "77"} {
@@ -174,6 +178,35 @@ func TestProcessBx24AddsWhenMissing(t *testing.T) {
 	}
 	if len(box.completed) != 1 || box.completed[0] != "task-1" {
 		t.Fatalf("completed %v", box.completed)
+	}
+}
+
+func TestProcessBx24AddsEvenWithSkorozvonBitrixField(t *testing.T) {
+	box := &stubOutboxBx24{items: []entity.OutboxBx24{
+		{UUID: "task-1", LeadUUID: "lead-aaa"},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{
+		UUID:  "lead-aaa",
+		Phone: "79001234567",
+		AnketaFields: []entity.SkorozvonAnketaFieldItem{
+			{FieldName: "ID лида Б24", EnumID: 17976350},
+			{FieldName: "Сумма долга", EnumName: "300-400 тыс."},
+		},
+	}}
+	api := &stubBx24{id: 0, addID: 77, addRaw: []byte(`{"result":77}`)}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxBx24(box).
+		WithBx24(api)
+
+	n, err := svc.ProcessBx24(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(api.payload) == 0 {
+		t.Fatal("add not called")
+	}
+	if len(leads.bitrixBinds) != 1 || leads.bitrixBinds[0] != [2]string{"lead-aaa", "77"} {
+		t.Fatalf("binds %v", leads.bitrixBinds)
 	}
 }
 
@@ -301,6 +334,7 @@ func (s stubDicts) ListOperators(context.Context) ([]entity.NamedRef, error) {
 	}
 	return out, nil
 }
+func (s stubDicts) ListStatuses(context.Context) ([]entity.NamedRef, error) { return nil, nil }
 func (s stubDicts) ListOperatorGroups(context.Context) ([]entity.OperatorGroup, error) {
 	return nil, nil
 }
@@ -895,6 +929,9 @@ func (s *stubSkorozvonSend) SendLead(_ context.Context, lead port.SkorozvonLead)
 func (s *stubSkorozvonSend) DeleteLead(context.Context, int) error { return nil }
 func (s *stubSkorozvonSend) CheckProject(context.Context, int64) bool {
 	return true
+}
+func (s *stubSkorozvonSend) ListCustomFields(context.Context) ([]port.SkorozvonCustomField, error) {
+	return nil, nil
 }
 
 func TestHandleSendsSkorozvonInParallel(t *testing.T) {

@@ -50,6 +50,7 @@ type WorkerService struct {
 	partners    port.PartnerRepository
 	links       port.SkorozvonLinkRepository
 	skorozvon   port.Skorozvon
+	maps        port.SkorozvonMapRepository
 	bx24        bx24API
 	poster      formPoster
 	retryWaits  []time.Duration
@@ -121,6 +122,13 @@ func (s *WorkerService) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			s.loop(ctx)
+		}()
+	}
+	if s.skorozvon != nil && s.maps != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.loopSkorozvonMaps(ctx)
 		}()
 	}
 	wg.Wait()

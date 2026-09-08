@@ -392,6 +392,7 @@ async function showTab(id) {
   if (gen !== tabLoadGen) return;
   renderPanels();
   if (id === 'incomingTraffic') loadIncomingCounts();
+  if (id === 'skorozvonBitrix') loadSkorozvonBitrixStats();
   if (id === 'regionControl') loadRegionStats();
   if (id === 'operatorControl') loadOperatorStats();
   if (id === 'zaryaControl') loadZaryaStats();
@@ -702,18 +703,15 @@ const PANEL_RENDERERS = {
   },
 
   skorozvonBitrix: () => {
-    const rows = rootSources().map(root => {
-      const s = skorozvonBitrixStatsForRange(root.id, skorozvonBitrixRange.from, skorozvonBitrixRange.to);
-      return `<tr>
-        <td style="font-weight:600;">${root.nazvanie}</td>
-        <td>${s.updated.toLocaleString('ru-RU')}</td>
-        <td>${s.sentAfterUpdate.toLocaleString('ru-RU')}</td>
-        <td style="color:${s.conversionUpdate < 50 ? 'var(--danger)' : 'var(--text-2)'};">${s.conversionUpdate}%</td>
-        <td style="border-left:1px solid var(--border);">${s.createdFromSkorozvon.toLocaleString('ru-RU')}</td>
-        <td>${s.sentNew.toLocaleString('ru-RU')}</td>
-        <td style="color:${s.conversionNew < 50 ? 'var(--danger)' : 'var(--text-2)'};">${s.conversionNew}%</td>
-      </tr>`;
-    }).join('');
+    const sources = rootSources().map(root => ({ id: root.id, nazvanie: root.nazvanie }));
+    const none = skorozvonBitrixStats.byId[0];
+    if (none && (none.created || none.updated)) {
+      sources.push({ id: 0, nazvanie: 'Без источника' });
+    }
+    const rows = sources.map(root => `<tr>
+        <td style="font-weight:600;">${escAttr(root.nazvanie)}</td>
+        ${skorozvonBitrixRow(root.id)}
+      </tr>`).join('');
     return {
       headers:['Источник','Обновилось','Отправлено (обновл.)','Конв.','Создалось со Скорозвона','Отправлено (новые)','Конв.'],
       rows, addFn:null,
@@ -722,7 +720,7 @@ const PANEL_RENDERERS = {
           <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">С</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${skorozvonBitrixRange.from}" onchange="setSkorozvonBitrixRange('from', this.value)"></div>
           <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">По</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${skorozvonBitrixRange.to}" onchange="setSkorozvonBitrixRange('to', this.value)"></div>
         </div>`,
-      note:'Левый блок (обновилось/отправлено/конв.) — обычный поток: строка была принята нами, webhook обновил её (статус 4), передана в Битрикс (статус 5). Правый блок («Создалось со Скорозвона») — строки без исходной записи в нашей системе (например, загружены в Скорозвон файлом напрямую, минуя приём) — Worker создаёт новую строку и сразу передаёт в Битрикс. Низкая конверсия (выделено) — сигнал проверить, не отклоняются ли строки при передаче. Данные для демонстрации моковые.'
+      note:'Левый блок — наши строки (via_us = true) с id в Скорозвоне: сколько обновилось и сколько из них ушло в Битрикс (есть bitrix_lead_id). Правый блок — строки, которых не было у нас (via_us = false): сколько создано из вебхука Скорозвона и сколько из них уже в Битрикс. Низкая конверсия (выделено) — сигнал проверить передачу в Б24.'
     };
   },
 
@@ -757,18 +755,39 @@ const PANEL_RENDERERS = {
   }),
 };
 
-let skorozvonBitrixRange = { from: '2026-08-14', to: '2026-08-20' };
-function setSkorozvonBitrixRange(field, value) { skorozvonBitrixRange[field] = value; renderPanels(); }
-function skorozvonBitrixStatsForRange(sourceId, from, to) {
-  const days = Math.max(1, Math.round((new Date(to) - new Date(from)) / 86400000) + 1);
-  const seed = sourceId * 41;
-  const updated = ((seed % 30) + 8) * days;
-  const conversionUpdate = 45 + (seed % 40);
-  const sentAfterUpdate = Math.round(updated * conversionUpdate / 100);
-  const createdFromSkorozvon = Math.round(((seed % 6) + 1) * days * 0.4); // редкий, ретро-поток
-  const conversionNew = 60 + ((seed*3) % 30);
-  const sentNew = Math.round(createdFromSkorozvon * conversionNew / 100);
-  return { updated, sentAfterUpdate, conversionUpdate, createdFromSkorozvon, sentNew, conversionNew };
+let skorozvonBitrixRange = defaultIncomingRange();
+let skorozvonBitrixStats = { key: '', loading: true, error: '', byId: {} };
+let skorozvonBitrixStatsGen = 0;
+function skorozvonBitrixRangeKey() { return skorozvonBitrixRange.from + '|' + skorozvonBitrixRange.to; }
+function setSkorozvonBitrixRange(field, value) { skorozvonBitrixRange[field] = value; loadSkorozvonBitrixStats(); }
+function skorozvonBitrixRow(sourceId) {
+  if (skorozvonBitrixStats.loading || skorozvonBitrixStats.key !== skorozvonBitrixRangeKey()) {
+    return statsSpinnerCell() + statsSpinnerCell() + statsSpinnerCell() + statsSpinnerCell() + statsSpinnerCell() + statsSpinnerCell();
+  }
+  if (skorozvonBitrixStats.error) {
+    return statsDashCell(skorozvonBitrixStats.error) + statsDashCell('') + statsDashCell('') + statsDashCell('') + statsDashCell('') + statsDashCell('');
+  }
+  const s = skorozvonBitrixStats.byId[sourceId] || { updated: 0, updated_sent: 0, created: 0, created_sent: 0 };
+  const convUpd = statPct(s.updated_sent, s.updated);
+  const convNew = statPct(s.created_sent, s.created);
+  return `<td>${(s.updated || 0).toLocaleString('ru-RU')}</td>
+        <td>${(s.updated_sent || 0).toLocaleString('ru-RU')}</td>
+        <td style="color:${convUpd < 50 && s.updated ? 'var(--danger)' : 'var(--text-2)'};">${convUpd}%</td>
+        <td style="border-left:1px solid var(--border);">${(s.created || 0).toLocaleString('ru-RU')}</td>
+        <td>${(s.created_sent || 0).toLocaleString('ru-RU')}</td>
+        <td style="color:${convNew < 50 && s.created ? 'var(--danger)' : 'var(--text-2)'};">${convNew}%</td>`;
+}
+async function loadSkorozvonBitrixStats() {
+  const box = { get gen() { return skorozvonBitrixStatsGen; }, set gen(v) { skorozvonBitrixStatsGen = v; }, get state() { return skorozvonBitrixStats; }, set state(v) { skorozvonBitrixStats = v; } };
+  await fetchRangeStats({
+    tab: 'skorozvonBitrix', range: skorozvonBitrixRange, path: '/rest/leads/skorozvon-bitrix-stats', box,
+    map: item => ({
+      updated: item.updated || 0,
+      updated_sent: item.updated_sent || 0,
+      created: item.created || 0,
+      created_sent: item.created_sent || 0,
+    }),
+  });
 }
 
 const enrichSourceIds = { regionControl: [], operatorControl: [], zaryaControl: [] };

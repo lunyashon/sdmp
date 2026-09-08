@@ -9,6 +9,7 @@ import (
 type DictRepository interface {
 	ListRegions(ctx context.Context) ([]entity.NamedRef, error)
 	ListOperators(ctx context.Context) ([]entity.NamedRef, error)
+	ListStatuses(ctx context.Context) ([]entity.NamedRef, error)
 	ListOperatorGroups(ctx context.Context) ([]entity.OperatorGroup, error)
 	ResolveRegion(ctx context.Context, alias string) (int, bool, error)
 	ResolveOperator(ctx context.Context, alias string) (int, bool, error)

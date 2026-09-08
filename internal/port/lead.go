@@ -8,21 +8,22 @@ import (
 )
 
 type LeadListFilter struct {
-	DateFrom   time.Time
-	DateTo     time.Time
+	DateFrom     time.Time
+	DateTo       time.Time
 	Sources      []int
 	ChildSources []int
 	ColdLabels   []string
-	Regions    []int
-	Operators  []int
-	Statuses   []int
-	Zarya      []string
-	Phone      string
-	City       string
-	Tag        string
-	CallResult *int32
-	Limit      int
-	Offset     int
+	Regions      []int
+	Operators    []int
+	Statuses     []int
+	Zarya        []string
+	Phone        string
+	City         string
+	Tag          string
+	CallResult   *int64
+	ViaUs        *bool
+	Limit        int
+	Offset       int
 }
 
 type LeadRepository interface {
@@ -31,6 +32,7 @@ type LeadRepository interface {
 	CountBySource(ctx context.Context, from, to time.Time) ([]entity.LeadSourceCount, error)
 	CountEnrichmentBySource(ctx context.Context, from, to time.Time) ([]entity.LeadEnrichmentStat, error)
 	CountZaryaBySource(ctx context.Context, from, to time.Time) ([]entity.LeadZaryaStat, error)
+	CountSkorozvonBitrixBySource(ctx context.Context, from, to time.Time) ([]entity.LeadSkorozvonBitrixStat, error)
 	Get(ctx context.Context, id int64) (entity.LeadDetail, error)
 	GetByUUID(ctx context.Context, uuid string) (entity.LeadDetail, error)
 	UpdateEnrichment(ctx context.Context, leadID int64, in entity.LeadEnrichment) error
@@ -39,6 +41,9 @@ type LeadRepository interface {
 	ApplyCallResult(ctx context.Context, skorozvonLeadID string, in entity.LeadCallResult) error
 	ApplyFormResponse(ctx context.Context, skorozvonLeadID string, in entity.LeadFormResponse) error
 	InsertFromSkorozvon(ctx context.Context, in entity.LeadFromSkorozvon) error
+	UpdateSkorozvonGeo(ctx context.Context, skorozvonLeadID string, in entity.LeadFromSkorozvon) error
+	ReplaceSkorozvonAnketaFields(ctx context.Context, skorozvonLeadID string, fields []entity.SkorozvonAnketaField) error
+	EnqueueBx24(ctx context.Context, skorozvonLeadID string) error
 	InsertDispatch(ctx context.Context, in entity.Dispatch) error
 	SaveZaryaResult(ctx context.Context, leadID int64, duplicate bool) error
 }

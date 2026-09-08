@@ -16,12 +16,19 @@ import (
 )
 
 type stubDictAPI struct {
-	groups []entity.OperatorGroup
-	added  []string
-	err    error
+	groups   []entity.OperatorGroup
+	statuses []entity.NamedRef
+	added    []string
+	err      error
 }
 
 func (s *stubDictAPI) ListRegions(context.Context) ([]entity.NamedRef, error) { return nil, nil }
+func (s *stubDictAPI) ListStatuses(context.Context) ([]entity.NamedRef, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.statuses, nil
+}
 func (s *stubDictAPI) ListOperatorGroups(context.Context) ([]entity.OperatorGroup, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -77,6 +84,26 @@ func TestAddOperatorAlias(t *testing.T) {
 	}
 	if len(api.added) != 1 || api.added[0] != "Билайн_1245" {
 		t.Fatalf("added %v", api.added)
+	}
+}
+
+func TestStatusesReturnsIDAndName(t *testing.T) {
+	api := &stubDictAPI{statuses: []entity.NamedRef{
+		{ID: 1, Name: "принята"},
+		{ID: 4, Name: "из СК"},
+	}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/statuses", nil)
+	dictsRouter(api).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	got := decodeData[struct {
+		Count int               `json:"count"`
+		Items []entity.NamedRef `json:"items"`
+	}](t, w.Body.Bytes())
+	if got.Count != 2 || got.Items[0].ID != 1 || got.Items[0].Name != "принята" || got.Items[1].Name != "из СК" {
+		t.Fatalf("%+v", got)
 	}
 }
 

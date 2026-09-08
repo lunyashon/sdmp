@@ -68,6 +68,15 @@ func (s *stubLeadFilter) ZaryaStats(context.Context, string, string) ([]entity.L
 	return []entity.LeadZaryaStat{{SourceID: 1, Total: 8, Unique: 5, Dup: 3}}, nil
 }
 
+func (s *stubLeadFilter) SkorozvonBitrixStats(context.Context, string, string) ([]entity.LeadSkorozvonBitrixStat, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return []entity.LeadSkorozvonBitrixStat{{
+		SourceID: 1, Updated: 10, UpdatedSent: 4, Created: 6, CreatedSent: 2,
+	}}, nil
+}
+
 func (s *stubLeadFilter) Get(_ context.Context, id int64) (entity.LeadDetail, error) {
 	if s.getErr != nil {
 		return entity.LeadDetail{}, s.getErr
@@ -140,10 +149,11 @@ func TestListLeads(t *testing.T) {
 			Stage:       "обогащена",
 			Phone:       "79009876539",
 			Zarya:       "Чистый",
+			ViaUs:       false,
 		}},
 	}}
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/rest/leads?date_from=01.08.2026+00:00:00&date_to=30.08.2026+23:59:59&sources=1&sources=12&child_sources=20&cold_label=ВР&region=1&region=5&operator=2&operator=3&zarya=Чистый&zarya=Дубль&phone=79009876539", nil)
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads?date_from=01.08.2026+00:00:00&date_to=30.08.2026+23:59:59&sources=1&sources=12&child_sources=20&cold_label=ВР&region=1&region=5&operator=2&operator=3&zarya=Чистый&zarya=Дубль&phone=79009876539&via_us=false&status=2&status=4", nil)
 	leadsRouter(svc).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
@@ -160,6 +170,15 @@ func TestListLeads(t *testing.T) {
 	}
 	if len(svc.q.Operators) != 2 || svc.q.Operators[1] != 3 || len(svc.q.Zarya) != 2 || svc.q.Zarya[0] != "Чистый" {
 		t.Fatalf("query %+v", svc.q)
+	}
+	if got.Leads[0].ViaUs {
+		t.Fatalf("via_us %+v", got.Leads[0])
+	}
+	if svc.q.ViaUs == nil || *svc.q.ViaUs {
+		t.Fatalf("query via_us %+v", svc.q.ViaUs)
+	}
+	if len(svc.q.Statuses) != 2 || svc.q.Statuses[0] != 2 || svc.q.Statuses[1] != 4 {
+		t.Fatalf("query status %+v", svc.q.Statuses)
 	}
 }
 
@@ -209,6 +228,38 @@ func TestGetLead(t *testing.T) {
 	}
 	if len(got.Lead.Events) != 1 || got.Lead.Events[0].Type != "принята" {
 		t.Fatalf("events %+v", got.Lead.Events)
+	}
+	if got.Lead.SkorozvonAnketaFields == nil {
+		t.Fatalf("anketa fields nil")
+	}
+}
+
+func TestGetLeadAnketaFields(t *testing.T) {
+	svc := &stubLeadFilter{detail: entity.LeadDetail{
+		ID:    42,
+		Phone: "79001234567",
+		AnketaFields: []entity.SkorozvonAnketaFieldItem{
+			{FieldID: 50000011777, FieldName: "Город клиента", EnumID: 50000004560, EnumName: "Краснодар"},
+			{FieldID: 50000011777, FieldName: "Город клиента", EnumID: 50000004578, EnumName: "Сочи"},
+			{FieldID: 1, EnumID: 2},
+		},
+	}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/42", nil)
+	leadsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	got := decodeData[dto.LeadDetailResponse](t, w.Body.Bytes())
+	if len(got.Lead.SkorozvonAnketaFields) != 2 {
+		t.Fatalf("fields %+v", got.Lead.SkorozvonAnketaFields)
+	}
+	city := got.Lead.SkorozvonAnketaFields[0]
+	if city.FieldID != 50000011777 || city.Name != "Город клиента" || strings.Join(city.Values, ",") != "Краснодар,Сочи" {
+		t.Fatalf("city %+v", city)
+	}
+	if got.Lead.SkorozvonAnketaFields[1].Name != "FIELD_1" || got.Lead.SkorozvonAnketaFields[1].Values[0] != "2" {
+		t.Fatalf("fallback %+v", got.Lead.SkorozvonAnketaFields[1])
 	}
 }
 
@@ -283,6 +334,22 @@ func TestZaryaStats(t *testing.T) {
 		Items []entity.LeadZaryaStat `json:"items"`
 	}](t, w.Body.Bytes())
 	if got.Count != 1 || got.Items[0].Unique != 5 || got.Items[0].Dup != 3 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestSkorozvonBitrixStats(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/skorozvon-bitrix-stats?date_from=2026-08-14&date_to=2026-08-20", nil)
+	leadsRouter(&stubLeadFilter{}).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	got := decodeData[struct {
+		Count int                              `json:"count"`
+		Items []entity.LeadSkorozvonBitrixStat `json:"items"`
+	}](t, w.Body.Bytes())
+	if got.Count != 1 || got.Items[0].Updated != 10 || got.Items[0].CreatedSent != 2 {
 		t.Fatalf("%+v", got)
 	}
 }

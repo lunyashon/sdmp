@@ -140,15 +140,125 @@ func (r *LeadRepo) ApplyCallResult(ctx context.Context, skorozvonLeadID string, 
 		    call_url = NULLIF($3, ''),
 		    call_last_at = $4,
 		    call_result = $5,
+		    call_result_name = COALESCE(NULLIF($7, ''), call_result_name),
 		    project_num = COALESCE(NULLIF($6, ''), project_num),
 		    updated_at = now()
 		WHERE skorozvon_lead_id = $1
-	`, skorozvonLeadID, in.CallID, in.CallURL, in.CallLastAt, in.CallResult, in.ProjectNum)
+	`, skorozvonLeadID, in.CallID, in.CallURL, in.CallLastAt, in.CallResult, in.ProjectNum, in.CallResultName)
 	if err != nil {
 		return fmt.Errorf("apply call result: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound
+	}
+	return nil
+}
+
+func (r *LeadRepo) UpdateSkorozvonGeo(ctx context.Context, skorozvonLeadID string, in entity.LeadFromSkorozvon) error {
+	city := strings.TrimSpace(in.City)
+	if city == "" && in.RegionID == nil {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx, `
+		UPDATE lead_row
+		SET city = COALESCE(NULLIF(btrim(city), ''), NULLIF($2, '')),
+		    region_id = COALESCE(region_id, $3),
+		    region_source = CASE
+		        WHEN region_id IS NULL AND $3 IS NOT NULL THEN $4
+		        ELSE region_source
+		    END,
+		    updated_at = now()
+		WHERE skorozvon_lead_id = $1
+	`, skorozvonLeadID, city, in.RegionID, in.RegionSource)
+	if err != nil {
+		return fmt.Errorf("update skorozvon geo: %w", err)
+	}
+	return nil
+}
+
+func (r *LeadRepo) ReplaceSkorozvonAnketaFields(ctx context.Context, skorozvonLeadID string, fields []entity.SkorozvonAnketaField) error {
+	if skorozvonLeadID == "" {
+		return fmt.Errorf("replace skorozvon anketa fields: empty skorozvon_lead_id")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("replace skorozvon anketa fields begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var leadRowID int64
+	err = tx.QueryRow(ctx, `SELECT id FROM lead_row WHERE skorozvon_lead_id = $1 LIMIT 1`, skorozvonLeadID).Scan(&leadRowID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("replace skorozvon anketa fields: lead not found")
+		}
+		return fmt.Errorf("replace skorozvon anketa fields lookup: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM skorozvon_anketa_fields WHERE skorozvon_lead_id = $1`, skorozvonLeadID); err != nil {
+		return fmt.Errorf("delete skorozvon anketa fields: %w", err)
+	}
+	for _, f := range fields {
+		if f.FieldID <= 0 || f.EnumID <= 0 {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO skorozvon_anketa_fields (lead_row_id, skorozvon_lead_id, field_id, enum_id)
+			VALUES ($1, $2, $3, $4)
+		`, leadRowID, skorozvonLeadID, f.FieldID, f.EnumID); err != nil {
+			return fmt.Errorf("insert skorozvon anketa field: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("replace skorozvon anketa fields commit: %w", err)
+	}
+	return nil
+}
+
+func (r *LeadRepo) EnqueueBx24(ctx context.Context, skorozvonLeadID string) error {
+	skorozvonLeadID = strings.TrimSpace(skorozvonLeadID)
+	if skorozvonLeadID == "" {
+		return fmt.Errorf("enqueue bx24: empty skorozvon_lead_id")
+	}
+	outboxID, err := id.NewUUID()
+	if err != nil {
+		return fmt.Errorf("outbox_bx24 id: %w", err)
+	}
+	var leadUUID string
+	err = r.pool.QueryRow(ctx, `
+		WITH lead AS (
+			SELECT id, uuid
+			FROM lead_row
+			WHERE skorozvon_lead_id = $1
+			  AND COALESCE(bitrix_lead_id, '') = ''
+		),
+		upd AS (
+			UPDATE lead_row lr
+			SET status_id = $2,
+			    updated_at = now()
+			FROM lead
+			WHERE lr.id = lead.id
+			RETURNING lr.id, lr.uuid
+		),
+		queued AS (
+			INSERT INTO outbox_bx24 (uuid, uuid_lead, locked_until)
+			SELECT $3, uuid, NULL
+			FROM upd
+			ON CONFLICT (uuid_lead) DO NOTHING
+			RETURNING uuid_lead
+		),
+		ev AS (
+			INSERT INTO event (lead_row_id, event_type_id, occurred_at, source)
+			SELECT id, $4, now(), $5
+			FROM upd
+			JOIN queued ON queued.uuid_lead = upd.uuid
+		)
+		SELECT uuid FROM upd
+	`, skorozvonLeadID, entity.StatusFromSK, outboxID, entity.EventFromSK, entity.EventSourceSK).Scan(&leadUUID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("enqueue bx24: %w", err)
 	}
 	return nil
 }
@@ -161,15 +271,11 @@ func (r *LeadRepo) ApplyFormResponse(ctx context.Context, skorozvonLeadID string
 	if in.Answers == nil {
 		answers = []byte("[]")
 	}
-	outboxID, err := id.NewUUID()
-	if err != nil {
-		return fmt.Errorf("outbox_bx24 id: %w", err)
-	}
 
 	var leadUUID string
 	err = r.pool.QueryRow(ctx, `
 		WITH lead AS (
-			SELECT id, uuid, bitrix_lead_id FROM lead_row WHERE skorozvon_lead_id = $1
+			SELECT id, uuid, via_us FROM lead_row WHERE skorozvon_lead_id = $1
 		),
 		ins AS (
 			INSERT INTO skorozvon_anketa (
@@ -186,24 +292,16 @@ func (r *LeadRepo) ApplyFormResponse(ctx context.Context, skorozvonLeadID string
 			    updated_at = now()
 			FROM ins
 			WHERE lr.id = ins.lead_row_id
-			RETURNING lr.uuid, lr.bitrix_lead_id
-		),
-		queued AS (
-			INSERT INTO outbox_bx24 (uuid, uuid_lead, locked_until)
-			SELECT $10, uuid, NULL
-			FROM updated
-			WHERE bitrix_lead_id IS NULL
-			ON CONFLICT (uuid_lead) DO NOTHING
-			RETURNING uuid_lead
+			RETURNING lr.id, lr.uuid, lr.via_us
 		),
 		ev AS (
 			INSERT INTO event (lead_row_id, event_type_id, occurred_at, source)
-			SELECT ins.lead_row_id, $11, now(), $12 FROM ins
+			SELECT id, $10, now(), $11
+			FROM updated
+			WHERE via_us
 		)
-		SELECT u.uuid
-		FROM updated u
-		LEFT JOIN queued q ON q.uuid_lead = u.uuid
-	`, skorozvonLeadID, in.CallID, in.UserID, in.FormID, in.ScenarioID, in.FormName, string(answers), in.UpdatedAt, entity.StatusFromSK, outboxID, entity.EventFromSK, entity.EventSourceSK).Scan(&leadUUID)
+		SELECT uuid FROM updated
+	`, skorozvonLeadID, in.CallID, in.UserID, in.FormID, in.ScenarioID, in.FormName, string(answers), in.UpdatedAt, entity.StatusFromSK, entity.EventFromSK, entity.EventSourceSK).Scan(&leadUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrNotFound
@@ -240,20 +338,21 @@ func (r *LeadRepo) InsertFromSkorozvon(ctx context.Context, in entity.LeadFromSk
 	err = r.pool.QueryRow(ctx, `
 		INSERT INTO lead_row (
 			uuid, phone, phone_valid, city, tag,
-			skorozvon_lead_id, status_id, via_us, source_id, legacy_fields, created_at, updated_at
+			skorozvon_lead_id, status_id, via_us, source_id, region_id, region_source,
+			legacy_fields, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7, false, NULL, NULLIF($8, ''), $9, now())
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7, false, NULL, $10::int, CASE WHEN $10::int IS NOT NULL THEN $11::smallint ELSE NULL END, NULLIF($8, ''), $9, now())
 		ON CONFLICT (skorozvon_lead_id) WHERE skorozvon_lead_id IS NOT NULL DO NOTHING
 		RETURNING id
 	`, uuid, phoneVal, phoneValid, strings.TrimSpace(in.City), strings.TrimSpace(in.Tag),
-		skorozvonLeadID, entity.StatusInSK, strings.TrimSpace(in.LegacyRaw), created).Scan(&leadID)
+		skorozvonLeadID, entity.StatusFromSK, strings.TrimSpace(in.LegacyRaw), created, in.RegionID, in.RegionSource).Scan(&leadID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		return fmt.Errorf("insert lead from skorozvon: %w", err)
 	}
-	return insertLeadEvent(ctx, r.pool, leadID, entity.EventInSK, entity.EventSourceSK, skorozvonLeadID)
+	return insertLeadEvent(ctx, r.pool, leadID, entity.EventFromSK, entity.EventSourceSK, skorozvonLeadID)
 }
 
 func (r *LeadRepo) InsertDispatch(ctx context.Context, in entity.Dispatch) error {
@@ -354,6 +453,7 @@ SELECT
 	st.id,
 	st.name,
 	lr.call_result,
+	COALESCE(lr.call_result_name, ''),
 	COALESCE(u.name, ''),
 	lr.phone,
 	COALESCE(z.name, ''),
@@ -361,7 +461,8 @@ SELECT
 	COALESCE(lr.web_id, ''),
 	COALESCE(lr.project_num, ''),
 	COALESCE(lr.call_id, ''),
-	COALESCE(lr.call_url, '')
+	COALESCE(lr.call_url, ''),
+	lr.via_us
 FROM page
 JOIN lead_row lr ON lr.id = page.id
 LEFT JOIN source ps ON ps.id = lr.source_id
@@ -413,6 +514,7 @@ ORDER BY lr.created_at DESC
 			&item.StatusID,
 			&item.Stage,
 			&item.CallResult,
+			&item.CallResultName,
 			&item.UPK,
 			&item.Phone,
 			&item.Zarya,
@@ -421,6 +523,7 @@ ORDER BY lr.created_at DESC
 			&item.ProjectNum,
 			&item.CallID,
 			&item.CallURL,
+			&item.ViaUs,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan lead: %w", err)
 		}
@@ -533,6 +636,47 @@ func (r *LeadRepo) CountZaryaBySource(ctx context.Context, from, to time.Time) (
 	return out, rows.Err()
 }
 
+func (r *LeadRepo) CountSkorozvonBitrixBySource(ctx context.Context, from, to time.Time) ([]entity.LeadSkorozvonBitrixStat, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT COALESCE(source_id, 0),
+		       COUNT(*) FILTER (
+		           WHERE via_us
+		             AND COALESCE(btrim(skorozvon_lead_id), '') <> ''
+		       )::int,
+		       COUNT(*) FILTER (
+		           WHERE via_us
+		             AND COALESCE(btrim(skorozvon_lead_id), '') <> ''
+		             AND COALESCE(btrim(bitrix_lead_id), '') <> ''
+		       )::int,
+		       COUNT(*) FILTER (WHERE NOT via_us)::int,
+		       COUNT(*) FILTER (
+		           WHERE NOT via_us
+		             AND COALESCE(btrim(bitrix_lead_id), '') <> ''
+		       )::int
+		FROM lead_row
+		WHERE created_at >= $1 AND created_at <= $2
+		GROUP BY COALESCE(source_id, 0)
+		HAVING COUNT(*) FILTER (
+		           WHERE via_us AND COALESCE(btrim(skorozvon_lead_id), '') <> ''
+		       ) > 0
+		    OR COUNT(*) FILTER (WHERE NOT via_us) > 0
+	`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("count skorozvon bitrix by source: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]entity.LeadSkorozvonBitrixStat, 0)
+	for rows.Next() {
+		var item entity.LeadSkorozvonBitrixStat
+		if err := rows.Scan(&item.SourceID, &item.Updated, &item.UpdatedSent, &item.Created, &item.CreatedSent); err != nil {
+			return nil, fmt.Errorf("scan skorozvon bitrix stat: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 const leadDetailSelect = `
 SELECT
 	lr.id,
@@ -556,6 +700,7 @@ SELECT
 	COALESCE(lr.web_id, ''),
 	COALESCE(lr.tag, ''),
 	lr.call_result,
+	COALESCE(lr.call_result_name, ''),
 	COALESCE(lr.call_id, ''),
 	COALESCE(lr.call_url, ''),
 	lr.call_last_at,
@@ -646,6 +791,7 @@ func (r *LeadRepo) getLead(ctx context.Context, where string, arg any) (entity.L
 		&d.WebID,
 		&d.Tag,
 		&d.CallResult,
+		&d.CallResultName,
 		&d.CallID,
 		&d.CallURL,
 		&d.CallLastAt,
@@ -692,7 +838,42 @@ func (r *LeadRepo) getLead(ctx context.Context, where string, arg any) (entity.L
 		return entity.LeadDetail{}, err
 	}
 	d.Anketa = anketa
+
+	fields, err := r.listAnketaFields(ctx, d.ID)
+	if err != nil {
+		return entity.LeadDetail{}, err
+	}
+	d.AnketaFields = fields
 	return d, nil
+}
+
+func (r *LeadRepo) listAnketaFields(ctx context.Context, leadID int64) ([]entity.SkorozvonAnketaFieldItem, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			f.field_id,
+			COALESCE(mf.name, ''),
+			f.enum_id,
+			COALESCE(mo.name, '')
+		FROM skorozvon_anketa_fields f
+		LEFT JOIN skorozvon_maps mf ON mf.field_id = f.field_id AND mf.option_id = 0
+		LEFT JOIN skorozvon_maps mo ON mo.field_id = f.field_id AND mo.option_id = f.enum_id
+		WHERE f.lead_row_id = $1
+		ORDER BY f.id
+	`, leadID)
+	if err != nil {
+		return nil, fmt.Errorf("list anketa fields: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]entity.SkorozvonAnketaFieldItem, 0)
+	for rows.Next() {
+		var item entity.SkorozvonAnketaFieldItem
+		if err := rows.Scan(&item.FieldID, &item.FieldName, &item.EnumID, &item.EnumName); err != nil {
+			return nil, fmt.Errorf("scan anketa field: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (r *LeadRepo) getAnketa(ctx context.Context, leadID int64) (*entity.SkorozvonAnketa, error) {
@@ -892,6 +1073,9 @@ func leadListWhere(f port.LeadListFilter) (string, []any) {
 	}
 	if f.Phone != "" {
 		b.WriteString(" AND lr.phone = " + next(f.Phone))
+	}
+	if f.ViaUs != nil {
+		b.WriteString(" AND lr.via_us = " + next(*f.ViaUs))
 	}
 	if len(f.Zarya) > 0 {
 		p := next(f.Zarya)

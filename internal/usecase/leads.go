@@ -36,7 +36,8 @@ type LeadFilterQuery struct {
 	Phone        string
 	City         string
 	Tag          string
-	CallResult   *int32
+	CallResult   *int64
+	ViaUs        *bool
 	Limit        int
 	Offset       int
 }
@@ -68,6 +69,8 @@ type LeadService struct {
 	storage  port.S3
 	partners port.PartnerRepository
 	poster   port.HTTPFormPoster
+	dicts    port.DictRepository
+	maps     port.SkorozvonMapRepository
 	log      *slog.Logger
 }
 
@@ -86,6 +89,16 @@ func (s *LeadService) WithStorage(storage port.S3) *LeadService {
 func (s *LeadService) WithPartners(partners port.PartnerRepository, poster port.HTTPFormPoster) *LeadService {
 	s.partners = partners
 	s.poster = poster
+	return s
+}
+
+func (s *LeadService) WithDicts(dicts port.DictRepository) *LeadService {
+	s.dicts = dicts
+	return s
+}
+
+func (s *LeadService) WithSkorozvonMaps(maps port.SkorozvonMapRepository) *LeadService {
+	s.maps = maps
 	return s
 }
 
@@ -128,6 +141,7 @@ func (s *LeadService) Filter(ctx context.Context, q LeadFilterQuery) (LeadFilter
 		City:         strings.TrimSpace(q.City),
 		Tag:          strings.TrimSpace(q.Tag),
 		CallResult:   q.CallResult,
+		ViaUs:        q.ViaUs,
 		Limit:        limit,
 		Offset:       offset,
 	}
@@ -180,6 +194,21 @@ func (s *LeadService) ZaryaStats(ctx context.Context, dateFrom, dateTo string) (
 	}
 	if items == nil {
 		items = []entity.LeadZaryaStat{}
+	}
+	return items, nil
+}
+
+func (s *LeadService) SkorozvonBitrixStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadSkorozvonBitrixStat, error) {
+	from, to, err := parseStatsRange(dateFrom, dateTo)
+	if err != nil {
+		return nil, err
+	}
+	items, err := s.leads.CountSkorozvonBitrixBySource(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	if items == nil {
+		items = []entity.LeadSkorozvonBitrixStat{}
 	}
 	return items, nil
 }
@@ -308,14 +337,25 @@ func (s *LeadService) ApplyCallResult(ctx context.Context, skorozvonLeadID strin
 	if skorozvonLeadID == "" {
 		return fmt.Errorf("%w: lead.id is required", domain.ErrInvalidInput)
 	}
+	s.enrichSnapGeo(ctx, &snap)
+	s.logCallResult(ctx, skorozvonLeadID, in, snap)
 	err := s.leads.ApplyCallResult(ctx, skorozvonLeadID, in)
-	if err == nil || !errors.Is(err, domain.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
+		if err := s.ensureFromSkorozvon(ctx, skorozvonLeadID, snap); err != nil {
+			return err
+		}
+		err = s.leads.ApplyCallResult(ctx, skorozvonLeadID, in)
+	}
+	if err != nil {
 		return err
 	}
-	if err := s.ensureFromSkorozvon(ctx, skorozvonLeadID, snap); err != nil {
-		return err
+	s.updateSkorozvonGeo(ctx, skorozvonLeadID, snap)
+	s.replaceSkorozvonAnketaFields(ctx, skorozvonLeadID, snap.CustomFields)
+	if !isTransferredLead(in.CallResultName) {
+		return nil
 	}
-	return s.leads.ApplyCallResult(ctx, skorozvonLeadID, in)
+	s.log.Info("skorozvon enqueue bx24", "skorozvon_lead_id", skorozvonLeadID)
+	return s.leads.EnqueueBx24(ctx, skorozvonLeadID)
 }
 
 func (s *LeadService) ApplyFormResponse(ctx context.Context, skorozvonLeadID string, in entity.LeadFormResponse, snap entity.LeadFromSkorozvon) error {
@@ -323,14 +363,127 @@ func (s *LeadService) ApplyFormResponse(ctx context.Context, skorozvonLeadID str
 	if skorozvonLeadID == "" {
 		return fmt.Errorf("%w: lead.id is required", domain.ErrInvalidInput)
 	}
+	s.enrichSnapGeo(ctx, &snap)
 	err := s.leads.ApplyFormResponse(ctx, skorozvonLeadID, in)
-	if err == nil || !errors.Is(err, domain.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
+		if err := s.ensureFromSkorozvon(ctx, skorozvonLeadID, snap); err != nil {
+			return err
+		}
+		err = s.leads.ApplyFormResponse(ctx, skorozvonLeadID, in)
+	}
+	if err != nil {
 		return err
 	}
-	if err := s.ensureFromSkorozvon(ctx, skorozvonLeadID, snap); err != nil {
-		return err
+	s.updateSkorozvonGeo(ctx, skorozvonLeadID, snap)
+	s.replaceSkorozvonAnketaFields(ctx, skorozvonLeadID, snap.CustomFields)
+	return nil
+}
+
+func (s *LeadService) logCallResult(ctx context.Context, skorozvonLeadID string, in entity.LeadCallResult, snap entity.LeadFromSkorozvon) {
+	var resultID any
+	if in.CallResult != nil {
+		resultID = *in.CallResult
 	}
-	return s.leads.ApplyFormResponse(ctx, skorozvonLeadID, in)
+	var regionID any
+	if snap.RegionID != nil {
+		regionID = *snap.RegionID
+	}
+	var lastAt any
+	if in.CallLastAt != nil {
+		lastAt = in.CallLastAt.In(clock.Location).Format(LeadDateLayout)
+	}
+	s.log.Info("skorozvon call_result parsed",
+		"skorozvon_lead_id", skorozvonLeadID,
+		"phone", snap.Phone,
+		"city", snap.City,
+		"region", snap.Region,
+		"region_id", regionID,
+		"tag", snap.Tag,
+		"call_id", in.CallID,
+		"call_url", in.CallURL,
+		"call_last_at", lastAt,
+		"call_result", resultID,
+		"result_name", in.CallResultName,
+		"project_num", in.ProjectNum,
+		"custom_fields", s.formatSkorozvonCustomFields(ctx, snap.CustomFields),
+	)
+}
+
+func (s *LeadService) formatSkorozvonCustomFields(ctx context.Context, fields []entity.SkorozvonCustomValue) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		parts = append(parts, s.skorozvonFieldName(ctx, f.FieldID)+"="+s.skorozvonFieldValue(ctx, f))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (s *LeadService) skorozvonFieldName(ctx context.Context, fieldID int64) string {
+	fallback := fmt.Sprintf("FIELD_%d", fieldID)
+	if s.maps == nil || fieldID == 0 {
+		return fallback
+	}
+	meta, ok, err := s.maps.Get(ctx, fieldID, 0)
+	if err != nil || !ok {
+		return fallback
+	}
+	if name := strings.TrimSpace(meta.Name); name != "" {
+		return name
+	}
+	return fallback
+}
+
+func (s *LeadService) skorozvonFieldValue(ctx context.Context, field entity.SkorozvonCustomValue) string {
+	parts := decodeCustomFieldParts(field.Raw)
+	if len(parts) == 0 {
+		return strings.TrimSpace(string(field.Raw))
+	}
+	vals := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if text := strings.TrimSpace(part.text); text != "" {
+			vals = append(vals, text)
+			continue
+		}
+		if part.optionID == 0 || s.maps == nil {
+			continue
+		}
+		opt, ok, err := s.maps.Get(ctx, field.FieldID, part.optionID)
+		if err != nil || !ok {
+			vals = append(vals, fmt.Sprintf("%d", part.optionID))
+			continue
+		}
+		if name := strings.TrimSpace(opt.Name); name != "" {
+			vals = append(vals, name)
+			continue
+		}
+		vals = append(vals, fmt.Sprintf("%d", part.optionID))
+	}
+	if len(vals) == 0 {
+		return strings.TrimSpace(string(field.Raw))
+	}
+	return strings.Join(vals, ", ")
+}
+
+func (s *LeadService) updateSkorozvonGeo(ctx context.Context, skorozvonLeadID string, snap entity.LeadFromSkorozvon) {
+	if err := s.leads.UpdateSkorozvonGeo(ctx, skorozvonLeadID, snap); err != nil {
+		s.log.Warn("skorozvon geo update failed", "skorozvon_lead_id", skorozvonLeadID, "error", err)
+	}
+}
+
+func (s *LeadService) replaceSkorozvonAnketaFields(ctx context.Context, skorozvonLeadID string, fields []entity.SkorozvonCustomValue) {
+	rows := anketaFieldsFromCustom(fields)
+	if len(rows) == 0 {
+		return
+	}
+	if err := s.leads.ReplaceSkorozvonAnketaFields(ctx, skorozvonLeadID, rows); err != nil {
+		s.log.Warn("skorozvon anketa fields replace failed", "skorozvon_lead_id", skorozvonLeadID, "error", err)
+	}
+}
+
+func isTransferredLead(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "Передан лид")
 }
 
 func (s *LeadService) ensureFromSkorozvon(ctx context.Context, skorozvonLeadID string, snap entity.LeadFromSkorozvon) error {
@@ -342,6 +495,7 @@ func (s *LeadService) ensureFromSkorozvon(ctx context.Context, skorozvonLeadID s
 		"skorozvon_lead_id", skorozvonLeadID,
 		"phone", snap.Phone,
 		"city", snap.City,
+		"region", snap.Region,
 	)
 	return s.leads.InsertFromSkorozvon(ctx, snap)
 }

@@ -17,8 +17,22 @@ type SkorozvonSendResult struct {
 	Body   []byte
 }
 
+type SkorozvonCustomFieldOption struct {
+	ID    int64
+	Label string
+}
+
+type SkorozvonCustomField struct {
+	ID        int64
+	Name      string
+	FieldType string
+	LeadType  string
+	Options   []SkorozvonCustomFieldOption
+}
+
 type Skorozvon interface {
 	SendLead(ctx context.Context, lead SkorozvonLead) (SkorozvonSendResult, error)
 	DeleteLead(ctx context.Context, id int) error
 	CheckProject(ctx context.Context, projectID int64) bool
+	ListCustomFields(ctx context.Context) ([]SkorozvonCustomField, error)
 }

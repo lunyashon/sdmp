@@ -39,7 +39,8 @@ const FIELD_CATALOG = [
     { id: 'operator', label: 'Оператор связи', group: 'lead_row', type: 'multiselect', pinned: true, options: [] },
     { id: 'zarya', label: 'Проверка Зари', group: 'Основные', type: 'multiselect', pinned: true, options: ZARYA_OPTIONS },
     { id: 'phone', label: 'Телефон', group: 'Основные', type: 'text', pinned: true },
-    { id: 'stage', label: 'Стадия', group: 'lead_row', type: 'select', options: STAGE_OPTIONS },
+    { id: 'stage', label: 'Стадия', group: 'lead_row', type: 'multiselect', pinned: true, options: STAGE_OPTIONS },
+    { id: 'viaUs', label: 'Из скорозвона', group: 'lead_row', type: 'select', pinned: true, options: [['false', 'да'], ['true', 'нет']] },
     { id: 'city', label: 'Город', group: 'lead_row', type: 'text' },
     { id: 'teg', label: 'Тег (вход)', group: 'lead_row', type: 'text' },
     { id: 'callResult', label: 'Результат звонка', group: 'lead_row', type: 'text' },
@@ -59,21 +60,22 @@ const COLUMN_CATALOG = [
     { id: 'city', label: 'Город', get: r => esc(r.city || '—') },
     { id: 'operator', label: 'Оператор', get: r => esc(r.operator || '—') },
     { id: 'stage', label: 'Стадия', get: r => `<span class="stage"><span class="dot dot-${r.status_id || 0}"></span>${esc(r.stage || '—')}</span>` },
+    { id: 'viaUs', label: 'Из скорозвона', get: r => r.via_us === false ? 'да' : 'нет' },
     { id: 'zarya', label: 'Проверка Зари', get: r => r.zarya ? `<span class="badge ${zaryaBadgeClass(r.zarya)}">${esc(r.zarya)}</span>` : '—' },
-    { id: 'callResult', label: 'Результат звонка', get: r => r.call_result != null ? esc(String(r.call_result)) : '—' },
+    { id: 'callResult', label: 'Результат звонка', get: r => esc(r.call_result_name || (r.call_result != null ? String(r.call_result) : '') || '—') },
     { id: 'upk', label: 'ЮПК', get: r => esc(r.upk || '—') },
     { id: 'phone', label: 'Телефон', get: r => esc(r.phone || '—') },
     { id: 'teg', label: 'Тег (вход)', get: r => esc(r.tag || '—') },
     { id: 'webId', label: 'Web ID', get: r => esc(r.web_id || '—') },
     { id: 'projectNum', label: '№ проекта', get: r => esc(r.project_num || '—') },
 ];
-const DEFAULT_COLUMNS = ['date', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'stage', 'zarya', 'upk', 'phone'];
+const DEFAULT_COLUMNS = ['date', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'stage', 'viaUs', 'zarya', 'upk', 'phone'];
 const COL_PREFS_KEY = 'sdmp.list.colprefs';
 const CARD_PREFS_KEY = 'sdmp.list.cardfields';
 const MIN_COL_WIDTH = 64;
 const DEFAULT_COL_WIDTHS = {
     chk: 36, uuid: 280, date: 150, source: 140, childSource: 160, baza: 140, kakaya: 140,
-    sourceDesc: 180, region: 200, city: 140, operator: 120, stage: 120, zarya: 140,
+    sourceDesc: 180, region: 200, city: 140, operator: 120, stage: 120, viaUs: 130, zarya: 140,
     callResult: 130, upk: 110, phone: 130, teg: 120, webId: 120, projectNum: 110,
 };
 let activeColumns = DEFAULT_COLUMNS.slice();
@@ -96,7 +98,7 @@ const EVENT_SOURCE = { 1: 'Worker', 2: 'Скорозвон', 3: 'API', 4: 'вн�
 
 const CARD_FIELD_CATALOG = [
     { id: 'stage', label: 'Стадия', get: r => esc(r.stage || '—') },
-    { id: 'viaUs', label: 'Через нас', get: r => r.via_us === false ? 'нет (из Скорозвона)' : 'да' },
+    { id: 'viaUs', label: 'Из скорозвона', get: r => r.via_us === false ? 'да' : 'нет' },
     { id: 'source', label: 'Источник', get: r => esc(r.source || '—') },
     { id: 'childSource', label: 'Подисточник', get: r => esc(r.child_source || '—') },
     { id: 'baza', label: 'Холодная база', get: r => esc(r.cold_label || '—') },
@@ -117,7 +119,7 @@ const CARD_FIELD_CATALOG = [
     },
     { id: 'teg', label: 'Тег (вход)', get: r => esc(r.tag || '—') },
     { id: 'zarya', label: 'Проверка по Заре', get: r => r.zarya ? `<span class="badge ${zaryaBadgeClass(r.zarya)}">${esc(r.zarya)}</span>` : '—' },
-    { id: 'callResult', label: 'Результат звонка', get: r => r.call_result != null ? esc(String(r.call_result)) : '—' },
+    { id: 'callResult', label: 'Результат звонка', get: r => esc(r.call_result_name || (r.call_result != null ? String(r.call_result) : '') || '—') },
     { id: 'upk', label: 'ЮПК', get: r => esc(r.upk || '—') },
     { id: 'webId', label: 'Web ID', get: r => esc(r.web_id || '—') },
     { id: 'projectNum', label: '№ проекта', get: r => esc(r.project_num || '—') },
@@ -181,10 +183,11 @@ function setFieldOptions(id, options) {
 }
 
 async function loadCatalogs() {
-    const [sourcesRes, regionsRes, operatorsRes] = await Promise.all([
+    const [sourcesRes, regionsRes, operatorsRes, statusesRes] = await Promise.all([
         fetch(API + '/rest/sources').then(r => r.json()).then(apiData),
         fetch(API + '/rest/regions').then(r => r.json()).then(apiData),
         fetch(API + '/rest/operators').then(r => r.json()).then(apiData),
+        fetch(API + '/rest/statuses').then(r => r.json()).then(apiData),
     ]);
     const allSources = sourcesRes.sources || [];
     const parentById = {};
@@ -204,6 +207,8 @@ async function loadCatalogs() {
     }));
     setFieldOptions('region', (regionsRes.items || []).map(x => [String(x.id), x.name]));
     setFieldOptions('operator', (operatorsRes.items || []).map(x => [String(x.id), x.name]));
+    const statuses = (statusesRes.items || []).map(x => [String(x.id), x.name]);
+    if (statuses.length) setFieldOptions('stage', statuses);
 }
 
 function renderFiltersGrid() {
@@ -397,14 +402,15 @@ function buildQuery() {
     appendMulti(params, 'zarya', getFieldValue('zarya'));
     const phone = getFieldValue('phone');
     if (phone) params.set('phone', phone);
-    const stage = getFieldValue('stage');
-    if (stage) params.append('status', stage);
+    appendMulti(params, 'status', getFieldValue('stage'));
     const city = getFieldValue('city');
     if (city) params.set('city', city);
     const teg = getFieldValue('teg');
     if (teg) params.set('tag', teg);
     const callResult = getFieldValue('callResult');
     if (callResult) params.set('call_result', callResult);
+    const viaUs = getFieldValue('viaUs');
+    if (viaUs === 'true' || viaUs === 'false') params.set('via_us', viaUs);
     params.set('limit', String(pageSize));
     params.set('offset', String((page - 1) * pageSize));
     return params;
@@ -592,7 +598,14 @@ function loadColumnPrefs() {
         const known = new Set(COLUMN_CATALOG.map(c => c.id));
         if (Array.isArray(raw.visible)) {
             const next = raw.visible.filter(id => known.has(id));
-            if (next.length) activeColumns = next;
+            if (next.length) {
+                activeColumns = next;
+                if (!activeColumns.includes('viaUs')) {
+                    const after = activeColumns.indexOf('stage');
+                    if (after >= 0) activeColumns.splice(after + 1, 0, 'viaUs');
+                    else activeColumns.push('viaUs');
+                }
+            }
         }
         if (raw.widths && typeof raw.widths === 'object') {
             Object.keys(raw.widths).forEach(id => {
@@ -1090,9 +1103,16 @@ function renderCard(r) {
 
     renderCardMain(r);
 
+    const fields = r.skorozvon_anketa_fields;
     const anketa = r.skorozvon_anketa;
     const form = r.call_form;
-    if (anketa && Array.isArray(anketa.answers) && anketa.answers.length) {
+    if (Array.isArray(fields) && fields.length) {
+        const entries = fields.map(f => [
+            f.name || ('FIELD_' + (f.field_id || '')),
+            (f.values || []).filter(Boolean).join(', ') || '—',
+        ]);
+        document.getElementById('card-anketa').innerHTML = kvHtml(entries);
+    } else if (anketa && Array.isArray(anketa.answers) && anketa.answers.length) {
         const entries = anketa.answers.map(a => [
             a.question_name || ('вопрос ' + (a.question_id || '')),
             (a.answer_values || []).filter(Boolean).join(', ') || '—',
@@ -1104,7 +1124,7 @@ function renderCard(r) {
     } else if (form) {
         document.getElementById('card-anketa').innerHTML = kvHtml([['call_form', formatValue(form)]]);
     } else {
-        document.getElementById('card-anketa').innerHTML = '<div style="grid-column:1/-1; color:var(--text-muted); font-size:13px;">Анкета появится после form_response от Скорозвона.</div>';
+        document.getElementById('card-anketa').innerHTML = kvHtml([]);
     }
 
     document.getElementById('card-legacy').innerHTML = kvHtml(objectEntries(r.legacy_fields));

@@ -20,6 +20,7 @@ type LeadAPI interface {
 	IncomingStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadSourceCount, error)
 	EnrichmentStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadEnrichmentStat, error)
 	ZaryaStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadZaryaStat, error)
+	SkorozvonBitrixStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadSkorozvonBitrixStat, error)
 	Get(ctx context.Context, id int64) (entity.LeadDetail, error)
 	GetByUUID(ctx context.Context, uuid string) (entity.LeadDetail, error)
 	Raw(ctx context.Context, id int64, uuid string) (usecase.LeadRaw, error)
@@ -59,6 +60,7 @@ func (h *LeadsHandler) List(c *gin.Context) {
 		City:         q.City,
 		Tag:          q.Tag,
 		CallResult:   q.CallResult,
+		ViaUs:        q.ViaUs,
 		Limit:        q.Limit,
 		Offset:       q.Offset,
 	})
@@ -113,6 +115,19 @@ func (h *LeadsHandler) ZaryaStats(c *gin.Context) {
 		return
 	}
 	items, err := h.svc.ZaryaStats(c.Request.Context(), from, to)
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	response.List(c, items)
+}
+
+func (h *LeadsHandler) SkorozvonBitrixStats(c *gin.Context) {
+	from, to, ok := statsDates(c)
+	if !ok {
+		return
+	}
+	items, err := h.svc.SkorozvonBitrixStats(c.Request.Context(), from, to)
 	if err != nil {
 		response.HandleError(c, h.log, err)
 		return

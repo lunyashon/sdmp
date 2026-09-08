@@ -49,11 +49,12 @@ type LeadEnrichment struct {
 }
 
 type LeadCallResult struct {
-	CallID     string
-	CallURL    string
-	CallLastAt *time.Time
-	CallResult *int32
-	ProjectNum string
+	CallID         string
+	CallURL        string
+	CallLastAt     *time.Time
+	CallResult     *int64
+	CallResultName string
+	ProjectNum     string
 }
 
 type SkorozvonAnketaAnswer struct {
@@ -67,9 +68,30 @@ type LeadFromSkorozvon struct {
 	SkorozvonLeadID string
 	Phone           string
 	City            string
+	Region          string
+	RegionID        *int
+	RegionSource    int16
 	Tag             string
 	LegacyRaw       string
 	CreatedAt       time.Time
+	CustomFields    []SkorozvonCustomValue
+}
+
+type SkorozvonCustomValue struct {
+	FieldID int64
+	Raw     []byte
+}
+
+type SkorozvonAnketaField struct {
+	FieldID int64
+	EnumID  int64
+}
+
+type SkorozvonAnketaFieldItem struct {
+	FieldID   int64
+	FieldName string
+	EnumID    int64
+	EnumName  string
 }
 
 type LeadFormResponse struct {
@@ -107,7 +129,8 @@ type LeadListItem struct {
 	Operator          string
 	StatusID          int16
 	Stage             string
-	CallResult        *int32
+	CallResult        *int64
+	CallResultName    string
 	UPK               string
 	Phone             string
 	Zarya             string
@@ -116,6 +139,7 @@ type LeadListItem struct {
 	ProjectNum        string
 	CallID            string
 	CallURL           string
+	ViaUs             bool
 }
 
 type LeadEvent struct {
@@ -182,7 +206,8 @@ type LeadDetail struct {
 	OperatorSource    *int16
 	WebID             string
 	Tag               string
-	CallResult        *int32
+	CallResult        *int64
+	CallResultName    string
 	CallID            string
 	CallURL           string
 	CallLastAt        *time.Time
@@ -203,6 +228,7 @@ type LeadDetail struct {
 	Dispatches        []LeadDispatch
 	PhoneHistory      []LeadPhoneHistory
 	Anketa            *SkorozvonAnketa
+	AnketaFields      []SkorozvonAnketaFieldItem
 }
 
 type LeadSourceCount struct {
@@ -228,6 +254,14 @@ type LeadZaryaStat struct {
 	Total    int `json:"total"`
 	Unique   int `json:"unique"`
 	Dup      int `json:"dup"`
+}
+
+type LeadSkorozvonBitrixStat struct {
+	SourceID    int `json:"source_id"`
+	Updated     int `json:"updated"`
+	UpdatedSent int `json:"updated_sent"`
+	Created     int `json:"created"`
+	CreatedSent int `json:"created_sent"`
 }
 
 type LeadRow struct {
