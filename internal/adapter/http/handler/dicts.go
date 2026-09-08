@@ -38,10 +38,7 @@ func (h *DictsHandler) Regions(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.NamedRef{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func (h *DictsHandler) Operators(c *gin.Context) {
@@ -50,10 +47,7 @@ func (h *DictsHandler) Operators(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.OperatorGroup{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func (h *DictsHandler) AddOperatorAlias(c *gin.Context) {

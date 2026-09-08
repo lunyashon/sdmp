@@ -56,13 +56,10 @@ func TestOperatorsReturnsGroupsWithAliases(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got struct {
+	got := decodeData[struct {
 		Count int                    `json:"count"`
 		Items []entity.OperatorGroup `json:"items"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	}](t, w.Body.Bytes())
 	if got.Count != 1 || got.Items[0].Name != "БИЛАЙН" || len(got.Items[0].Aliases) != 2 {
 		t.Fatalf("%+v", got)
 	}

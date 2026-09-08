@@ -27,14 +27,14 @@ func (s *stubPartnerAPI) Create(_ context.Context, in usecase.PartnerInput) (ent
 	if s.err != nil {
 		return entity.Partner{}, s.err
 	}
-	s.saved = entity.Partner{ID: 3, Name: in.Name, WebhookURL: in.WebhookURL, IsActive: in.IsActive, ZaryaResults: in.ZaryaResults, RegionIDs: in.RegionIDs, StopSourceIDs: in.StopSourceIDs}
+	s.saved = entity.Partner{ID: 3, Name: in.Name, WebhookURL: in.WebhookURL, IsActive: in.IsActive, ZaryaResults: in.ZaryaResults, RegionIDs: in.RegionIDs, StopSourceIDs: in.StopSourceIDs, Body: in.Body, ContentType: in.ContentType}
 	return s.saved, nil
 }
 func (s *stubPartnerAPI) Update(_ context.Context, id int, in usecase.PartnerInput) (entity.Partner, error) {
 	if s.err != nil {
 		return entity.Partner{}, s.err
 	}
-	s.saved = entity.Partner{ID: id, Name: in.Name, WebhookURL: in.WebhookURL, IsActive: in.IsActive, ZaryaResults: in.ZaryaResults, RegionIDs: in.RegionIDs, StopSourceIDs: in.StopSourceIDs}
+	s.saved = entity.Partner{ID: id, Name: in.Name, WebhookURL: in.WebhookURL, IsActive: in.IsActive, ZaryaResults: in.ZaryaResults, RegionIDs: in.RegionIDs, StopSourceIDs: in.StopSourceIDs, Body: in.Body, ContentType: in.ContentType}
 	return s.saved, nil
 }
 
@@ -69,13 +69,10 @@ func TestListPartners(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got struct {
+	got := decodeData[struct {
 		Count int              `json:"count"`
 		Items []entity.Partner `json:"items"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	}](t, w.Body.Bytes())
 	if got.Count != 1 || got.Items[0].Name != "РТ" {
 		t.Fatalf("%+v", got)
 	}
@@ -86,6 +83,8 @@ func TestCreatePartner(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"name": "КР", "webhook_url": "https://example.test", "is_active": true,
 		"zarya_results": []string{"dup"}, "region_ids": []int{23}, "stop_source_ids": []int{},
+		"body":         map[string]string{"auth": "secret", "phone": "{{phone}}"},
+		"content_type": "application/x-www-form-urlencoded",
 	})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/rest/partners", bytes.NewReader(body))
@@ -94,7 +93,7 @@ func TestCreatePartner(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	if api.saved.Name != "КР" || api.saved.RegionIDs[0] != 23 {
+	if api.saved.Name != "КР" || api.saved.RegionIDs[0] != 23 || api.saved.Body["auth"] != "secret" || api.saved.ContentType != "application/x-www-form-urlencoded" {
 		t.Fatalf("%+v", api.saved)
 	}
 }
@@ -124,13 +123,10 @@ func TestRefreshPartners(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got struct {
+	got := decodeData[struct {
 		Count int                   `json:"count"`
 		Items []entity.PartnerCheck `json:"items"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	}](t, w.Body.Bytes())
 	if got.Count != 1 || !got.Items[0].OK || got.Items[0].HTTPStatus != 200 {
 		t.Fatalf("%+v", got)
 	}
@@ -143,10 +139,7 @@ func TestSendPartnerTest(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got entity.PartnerCheck
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	got := decodeData[entity.PartnerCheck](t, w.Body.Bytes())
 	if got.ID != 4 || !got.OK || got.Response != "accepted" {
 		t.Fatalf("%+v", got)
 	}

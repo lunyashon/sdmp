@@ -4,6 +4,7 @@ import (
 	gongin "github.com/gin-gonic/gin"
 
 	"github.com/lunyashon/sdmp/internal/adapter/http/handler"
+	"github.com/lunyashon/sdmp/internal/adapter/http/response"
 )
 
 type Handlers struct {
@@ -23,9 +24,7 @@ func NewRouter(h Handlers) *gongin.Engine {
 	router.Use(gongin.Logger())
 	router.Use(gongin.Recovery())
 
-	router.GET("/api/v1/health", func(c *gongin.Context) {
-		c.JSON(200, gongin.H{"status": "ok"})
-	})
+	router.GET("/api/v1/health", response.Health)
 
 	rest := router.Group("/rest")
 	{
@@ -34,6 +33,8 @@ func NewRouter(h Handlers) *gongin.Engine {
 		rest.GET("/leads/enrichment-stats", h.Leads.EnrichmentStats)
 		rest.GET("/leads/zarya-stats", h.Leads.ZaryaStats)
 		rest.GET("/leads/:id", h.Leads.Get)
+		rest.GET("/leads/:id/raw", h.Leads.Raw)
+		rest.POST("/leads/:id/partners/:partnerId/resend", h.Leads.ResendPartner)
 		rest.GET("/sources", h.Sources.List)
 		if h.Dicts != nil {
 			rest.GET("/regions", h.Dicts.Regions)

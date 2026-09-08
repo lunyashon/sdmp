@@ -2,18 +2,22 @@ package entity
 
 import "time"
 
+const PartnerContentTypeForm = "application/x-www-form-urlencoded"
+
 type Partner struct {
-	ID              int        `json:"id"`
-	Name            string     `json:"name"`
-	WebhookURL      string     `json:"webhook_url"`
-	IsActive        bool       `json:"is_active"`
-	ZaryaResults    []string   `json:"zarya_results"`
-	RegionIDs       []int      `json:"region_ids"`
-	StopSourceIDs   []int      `json:"stop_source_ids"`
-	LastDateRequest *time.Time `json:"last_date_request,omitempty"`
-	LastRequest     *bool      `json:"last_request,omitempty"`
-	LastHTTPStatus  *int       `json:"last_http_status,omitempty"`
-	LastResponse    string     `json:"last_response,omitempty"`
+	ID              int               `json:"id"`
+	Name            string            `json:"name"`
+	WebhookURL      string            `json:"webhook_url"`
+	IsActive        bool              `json:"is_active"`
+	ZaryaResults    []string          `json:"zarya_results"`
+	RegionIDs       []int             `json:"region_ids"`
+	StopSourceIDs   []int             `json:"stop_source_ids"`
+	Body            map[string]string `json:"body"`
+	ContentType     string            `json:"content_type"`
+	LastDateRequest *time.Time        `json:"last_date_request,omitempty"`
+	LastRequest     *bool             `json:"last_request,omitempty"`
+	LastHTTPStatus  *int              `json:"last_http_status,omitempty"`
+	LastResponse    string            `json:"last_response,omitempty"`
 }
 
 type PartnerCheck struct {

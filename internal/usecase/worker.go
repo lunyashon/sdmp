@@ -22,7 +22,7 @@ import (
 )
 
 type formPoster interface {
-	PostForm(ctx context.Context, rawURL string, data url.Values) ([]byte, int, error)
+	PostForm(ctx context.Context, rawURL string, data url.Values, contentType string) ([]byte, int, error)
 }
 
 type PhoneSearch interface {
@@ -35,6 +35,7 @@ const (
 	outboxIdleWait     = 300 * time.Millisecond
 	outboxErrorWait    = time.Second
 	outboxLockTTL      = 2 * time.Minute
+	outboxBx24Stale    = 5 * time.Minute
 )
 
 var partnerRetryWaits = []time.Duration{5 * time.Second, 10 * time.Second, 25 * time.Second}
@@ -42,12 +43,14 @@ var partnerRetryWaits = []time.Duration{5 * time.Second, 10 * time.Second, 25 * 
 type WorkerService struct {
 	phoneSearch PhoneSearch
 	outbox      port.OutboxRepository
+	outboxBx24  port.OutboxBx24Repository
 	dicts       port.DictRepository
 	leads       port.LeadRepository
 	splits      port.SplitRepository
 	partners    port.PartnerRepository
 	links       port.SkorozvonLinkRepository
 	skorozvon   port.Skorozvon
+	bx24        bx24API
 	poster      formPoster
 	retryWaits  []time.Duration
 	log         *slog.Logger
@@ -96,6 +99,21 @@ func (s *WorkerService) WithSkorozvon(links port.SkorozvonLinkRepository, api po
 	return s
 }
 
+func (s *WorkerService) WithOutboxBx24(box port.OutboxBx24Repository) *WorkerService {
+	s.outboxBx24 = box
+	return s
+}
+
+type bx24API interface {
+	SearchLead(ctx context.Context, idempotencyKey string) (crm.LeadSearchResult, error)
+	AddLead(ctx context.Context, payload []byte) (crm.LeadAddResult, error)
+}
+
+func (s *WorkerService) WithBx24(api bx24API) *WorkerService {
+	s.bx24 = api
+	return s
+}
+
 func (s *WorkerService) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	wg.Add(s.workers)
@@ -123,7 +141,15 @@ func (s *WorkerService) loop(ctx context.Context) {
 			}
 			continue
 		}
-		if n == 0 {
+		bx, bxErr := s.ProcessBx24(ctx)
+		if bxErr != nil {
+			s.log.ErrorContext(ctx, "outbox_bx24 batch failed", "error", bxErr)
+			if err := wait(ctx, s.onErr); err != nil {
+				return
+			}
+			continue
+		}
+		if n == 0 && bx == 0 {
 			if err := wait(ctx, s.idle); err != nil {
 				return
 			}
@@ -154,6 +180,79 @@ func (s *WorkerService) Process(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+func (s *WorkerService) ProcessBx24(ctx context.Context) (int, error) {
+	if s.outboxBx24 == nil {
+		return 0, nil
+	}
+	items, err := s.outboxBx24.Claim(ctx, s.limit, outboxBx24Stale)
+	if err != nil {
+		return 0, fmt.Errorf("claim outbox_bx24: %w", err)
+	}
+	for _, item := range items {
+		if err := s.handleBx24(ctx, item); err != nil {
+			s.log.Error("outbox_bx24 handle failed",
+				"uuid", item.UUID,
+				"uuid_lead", item.LeadUUID,
+				"error", err,
+			)
+		}
+	}
+	return len(items), nil
+}
+
+func (s *WorkerService) handleBx24(ctx context.Context, item entity.OutboxBx24) error {
+	if s.bx24 == nil {
+		return nil
+	}
+
+	res, err := s.bx24.SearchLead(ctx, item.LeadUUID)
+	if err != nil {
+		return err
+	}
+	if res.ID != 0 {
+		return s.bindBx24(ctx, item, res.ID)
+	}
+
+	if s.leads == nil {
+		return fmt.Errorf("leads repo is required")
+	}
+	lead, err := s.leads.GetByUUID(ctx, item.LeadUUID)
+	if err != nil {
+		return fmt.Errorf("get lead: %w", err)
+	}
+	payload, err := crm.LeadAddPayload(lead)
+	if err != nil {
+		return fmt.Errorf("bx24 payload: %w", err)
+	}
+	added, err := s.bx24.AddLead(ctx, payload)
+	s.log.Info("bx24 crm.lead.add",
+		"uuid", item.UUID,
+		"uuid_lead", item.LeadUUID,
+		"status", added.Status,
+		"result", added.ID,
+		"body", string(added.Raw),
+	)
+	if err != nil {
+		return err
+	}
+	if added.ID == 0 {
+		return nil
+	}
+	return s.bindBx24(ctx, item, added.ID)
+}
+
+func (s *WorkerService) bindBx24(ctx context.Context, item entity.OutboxBx24, bitrixLeadID int64) error {
+	if s.leads != nil {
+		if err := s.leads.BindBitrix(ctx, item.LeadUUID, strconv.FormatInt(bitrixLeadID, 10)); err != nil {
+			return fmt.Errorf("bind bitrix: %w", err)
+		}
+	}
+	if err := s.outboxBx24.Complete(ctx, item.UUID); err != nil {
+		return fmt.Errorf("complete outbox_bx24: %w", err)
+	}
+	return nil
+}
+
 func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) error {
 	fields, err := crm.ParsePayload(msg.Payload)
 	if err != nil {
@@ -162,7 +261,7 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 
 	normalized, ok := phone.Normalize(fields.Phone.String())
 	if !ok {
-		return fmt.Errorf("invalid phone number: %s", fields.Phone)
+		return s.rejectInvalidPhone(ctx, msg, fields.Phone.String())
 	}
 
 	regionRaw := strings.TrimSpace(fields.RegionUF.String())
@@ -298,7 +397,7 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		if err := s.sendToPartner(ctx, msg.LeadRowID, msg.SourceID, normalized, regionRaw, enrich.RegionID, resultDuplicate); err != nil {
+		if err := s.sendToPartner(ctx, msg.LeadRowID, msg.SourceID, normalized, regionRaw, enrich.RegionID, resultDuplicate, true); err != nil {
 			s.log.Error("send partners failed", "lead_id", msg.LeadRowID, "error", err)
 		}
 	}()
@@ -309,7 +408,29 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 		}
 	}()
 	wg.Wait()
-	
+
+	return nil
+}
+
+func (s *WorkerService) rejectInvalidPhone(ctx context.Context, msg entity.OutboxMessage, raw string) error {
+	reason := fmt.Sprintf("invalid phone number: %s", raw)
+	s.log.Warn("outbox lead rejected",
+		"outbox_id", msg.ID,
+		"lead_id", msg.LeadRowID,
+		"phone", raw,
+	)
+	if s.leads == nil {
+		return nil
+	}
+	if err := s.leads.InsertDispatch(ctx, entity.Dispatch{
+		LeadRowID:   msg.LeadRowID,
+		ChannelID:   entity.ChannelBitrix,
+		SentOK:      false,
+		Attempts:    1,
+		RawResponse: reason,
+	}); err != nil {
+		return fmt.Errorf("save invalid phone dispatch: %w", err)
+	}
 	return nil
 }
 
@@ -488,7 +609,7 @@ func (s *WorkerService) saveSkorozvonDispatch(ctx context.Context, leadID int64,
 	}
 }
 
-func (s *WorkerService) sendToPartner(ctx context.Context, leadID int64, sourceID int, phone, region string, regionID *int, duplicate bool) error {
+func (s *WorkerService) sendToPartner(ctx context.Context, leadID int64, sourceID int, phone, region string, regionID *int, duplicate, phoneValid bool) error {
 	if s.partners == nil {
 		return nil
 	}
@@ -512,38 +633,46 @@ func (s *WorkerService) sendToPartner(ctx context.Context, leadID int64, sourceI
 		return nil
 	}
 
-	form := url.Values{}
-	form.Set("fields[PHONE][0][VALUE]", phone)
-	form.Set("fields[PHONE][0][VALUE_TYPE]", "WORK")
-	form.Set("fields[ADDRESS_REGION]", region)
-	form.Set("fields[STATUS_ID]", entity.StatusEnrichedName)
-
+	vars := PartnerVars{Phone: phone, PhoneValid: phoneValid, Region: region, City: partnerCity(ctx, s.leads, leadID)}
 	var wg sync.WaitGroup
 	for i := range items {
 		p := items[i]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.sendOnePartner(ctx, leadID, zarya, p, form)
+			s.sendOnePartner(ctx, leadID, zarya, p, vars)
 		}()
 	}
 	wg.Wait()
 	return nil
 }
 
-func (s *WorkerService) sendOnePartner(ctx context.Context, leadID int64, zarya string, p entity.Partner, form url.Values) {
+func partnerCity(ctx context.Context, leads port.LeadRepository, leadID int64) string {
+	if leads == nil || leadID <= 0 {
+		return ""
+	}
+	lead, err := leads.Get(ctx, leadID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(lead.City)
+}
+
+func (s *WorkerService) sendOnePartner(ctx context.Context, leadID int64, zarya string, p entity.Partner, vars PartnerVars) {
 	if strings.TrimSpace(p.WebhookURL) == "" {
 		s.log.Info("partner webhook empty", "partner_id", p.ID, "name", p.Name)
 		return
 	}
-	raw, status, attempts, err := s.postPartner(ctx, p.WebhookURL, form)
+	form := BuildPartnerForm(p, vars)
+	target := PartnerRequestURL(p.WebhookURL, form)
+	raw, status, attempts, err := s.postPartner(ctx, target, form, PartnerContentType(p))
 	ok := err == nil && status >= 200 && status < 300
 	if !ok {
 		s.log.Error("partner send failed",
 			"lead_id", leadID,
 			"partner_id", p.ID,
 			"name", p.Name,
-			"url", p.WebhookURL,
+			"url", target,
 			"status", status,
 			"attempts", attempts,
 			"error", err,
@@ -554,7 +683,7 @@ func (s *WorkerService) sendOnePartner(ctx context.Context, leadID int64, zarya 
 			"lead_id", leadID,
 			"partner_id", p.ID,
 			"name", p.Name,
-			"url", p.WebhookURL,
+			"url", target,
 			"zarya", zarya,
 			"status", status,
 			"attempts", attempts,
@@ -564,7 +693,7 @@ func (s *WorkerService) sendOnePartner(ctx context.Context, leadID int64, zarya 
 	s.savePartnerDispatch(ctx, leadID, p.ID, ok, status, attempts, raw, err)
 }
 
-func (s *WorkerService) postPartner(ctx context.Context, rawURL string, form url.Values) ([]byte, int, int16, error) {
+func (s *WorkerService) postPartner(ctx context.Context, rawURL string, form url.Values, contentType string) ([]byte, int, int16, error) {
 	waits := s.retryWaits
 	if len(waits) == 0 {
 		waits = partnerRetryWaits
@@ -582,7 +711,7 @@ func (s *WorkerService) postPartner(ctx context.Context, rawURL string, form url
 			}
 		}
 		attempts++
-		raw, status, err = s.poster.PostForm(ctx, rawURL, form)
+		raw, status, err = s.poster.PostForm(ctx, rawURL, form, contentType)
 		if !retryPartner(status, err) {
 			return raw, status, attempts, err
 		}
@@ -628,9 +757,12 @@ type httpFormPoster struct {
 	http *http.Client
 }
 
-func (p *httpFormPoster) PostForm(ctx context.Context, rawURL string, data url.Values) ([]byte, int, error) {
+func (p *httpFormPoster) PostForm(ctx context.Context, rawURL string, data url.Values, contentType string) ([]byte, int, error) {
+	if strings.TrimSpace(contentType) == "" {
+		contentType = entity.PartnerContentTypeForm
+	}
 	return curl.CurlWithContext(ctx, p.http, rawURL, http.MethodPost, strings.NewReader(data.Encode()), map[string]string{
-		"Content-Type": "application/x-www-form-urlencoded",
+		"Content-Type": contentType,
 	})
 }
 

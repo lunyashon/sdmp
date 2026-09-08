@@ -7,6 +7,9 @@ const (
 	StatusEnriched int16 = 2
 	StatusInSK     int16 = 3
 	StatusFromSK   int16 = 4
+	StatusInB24    int16 = 5
+	StatusRejected int16 = 6
+	StatusWaiting  int16 = 7
 
 	StatusEnrichedName = "обогащена"
 
@@ -17,6 +20,20 @@ const (
 	ChannelSkorozvon int16 = 1
 	ChannelPartner   int16 = 2
 	ChannelBitrix    int16 = 3
+
+	EventAccepted int16 = 1
+	EventEnriched int16 = 2
+	EventInSK     int16 = 3
+	EventFromSK   int16 = 4
+	EventPartner  int16 = 5
+	EventInB24    int16 = 6
+	EventRejected int16 = 7
+	EventArchived int16 = 8
+
+	EventSourceWorker   int16 = 1
+	EventSourceSK       int16 = 2
+	EventSourceAPI      int16 = 3
+	EventSourceExternal int16 = 4
 )
 
 type LeadEnrichment struct {
@@ -37,6 +54,43 @@ type LeadCallResult struct {
 	CallLastAt *time.Time
 	CallResult *int32
 	ProjectNum string
+}
+
+type SkorozvonAnketaAnswer struct {
+	QuestionID   int64    `json:"question_id"`
+	QuestionName string   `json:"question_name"`
+	AnswerID     int64    `json:"answer_id"`
+	AnswerValues []string `json:"answer_values"`
+}
+
+type LeadFromSkorozvon struct {
+	SkorozvonLeadID string
+	Phone           string
+	City            string
+	Tag             string
+	LegacyRaw       string
+	CreatedAt       time.Time
+}
+
+type LeadFormResponse struct {
+	CallID     string
+	UserID     *int64
+	FormID     *int64
+	ScenarioID *int64
+	FormName   string
+	UpdatedAt  *time.Time
+	Answers    []SkorozvonAnketaAnswer
+}
+
+type SkorozvonAnketa struct {
+	ID         int64
+	UserID     *int64
+	FormID     *int64
+	ScenarioID *int64
+	FormName   string
+	CallID     string
+	UpdatedAt  *time.Time
+	Answers    []SkorozvonAnketaAnswer
 }
 
 type LeadListItem struct {
@@ -112,6 +166,7 @@ type LeadDetail struct {
 	UUID              string
 	Phone             string
 	PhoneValid        bool
+	ViaUs             bool
 	SourceID          *int
 	Source            string
 	ChildSourceID     *int
@@ -147,6 +202,7 @@ type LeadDetail struct {
 	Events            []LeadEvent
 	Dispatches        []LeadDispatch
 	PhoneHistory      []LeadPhoneHistory
+	Anketa            *SkorozvonAnketa
 }
 
 type LeadSourceCount struct {
@@ -192,4 +248,10 @@ type OutboxMessage struct {
 	SourceID  int
 	Payload   string
 	CreatedAt time.Time
+}
+
+type OutboxBx24 struct {
+	UUID        string
+	LeadUUID    string
+	LockedUntil *time.Time
 }

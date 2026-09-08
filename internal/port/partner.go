@@ -9,7 +9,7 @@ import (
 )
 
 type HTTPFormPoster interface {
-	PostForm(ctx context.Context, rawURL string, data url.Values) ([]byte, int, error)
+	PostForm(ctx context.Context, rawURL string, data url.Values, contentType string) ([]byte, int, error)
 }
 
 type PartnerRepository interface {

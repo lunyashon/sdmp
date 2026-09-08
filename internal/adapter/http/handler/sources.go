@@ -42,7 +42,7 @@ func (h *SourcesHandler) List(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, sourcesResponse(items))
+	response.Success(c, sourcesResponse(items))
 }
 
 func (h *SourcesHandler) CreateToken(c *gin.Context) {
@@ -58,7 +58,7 @@ func (h *SourcesHandler) CreateToken(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, dto.CreateTokenResponse{
+	response.Success(c, dto.CreateTokenResponse{
 		SourceID: src.ID,
 		Token:    token,
 	})
@@ -102,7 +102,7 @@ func (h *SourcesHandler) CreateChild(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, dto.NewSourceDTO(src))
+	response.JSON(c, http.StatusCreated, dto.NewSourceDTO(src))
 }
 
 func (h *SourcesHandler) ListByToken(c *gin.Context) {
@@ -111,7 +111,7 @@ func (h *SourcesHandler) ListByToken(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, sourcesResponse(items))
+	response.Success(c, sourcesResponse(items))
 }
 
 func (h *SourcesHandler) Delete(c *gin.Context) {
@@ -145,7 +145,7 @@ func (h *SourcesHandler) SetActive(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, dto.NewSourceDTO(src))
+	response.Success(c, dto.NewSourceDTO(src))
 }
 
 func sourcesResponse(items []entity.Source) dto.SourcesResponse {

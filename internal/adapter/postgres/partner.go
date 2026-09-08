@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -29,6 +30,7 @@ func NewPartnerRepo(pool *pgxpool.Pool) *PartnerRepo {
 func (r *PartnerRepo) List(ctx context.Context) ([]entity.Partner, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, name, webhook_url, is_active, COALESCE(zarya_results, '{}'),
+		       COALESCE(body, '{}'), COALESCE(NULLIF(content_type, ''), 'application/x-www-form-urlencoded'),
 		       last_date_request, last_request, last_http_status, COALESCE(last_response, '')
 		FROM upk
 		ORDER BY id
@@ -87,6 +89,7 @@ func (r *PartnerRepo) List(ctx context.Context) ([]entity.Partner, error) {
 func (r *PartnerRepo) Get(ctx context.Context, id int) (entity.Partner, error) {
 	p, err := scanPartnerRow(r.pool.QueryRow(ctx, `
 		SELECT id, name, webhook_url, is_active, COALESCE(zarya_results, '{}'),
+		       COALESCE(body, '{}'), COALESCE(NULLIF(content_type, ''), 'application/x-www-form-urlencoded'),
 		       last_date_request, last_request, last_http_status, COALESCE(last_response, '')
 		FROM upk
 		WHERE id = $1
@@ -128,6 +131,7 @@ func (r *PartnerRepo) Get(ctx context.Context, id int) (entity.Partner, error) {
 func (r *PartnerRepo) ListRoutable(ctx context.Context, zarya string, regionID *int, sourceID int) ([]entity.Partner, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT u.id, u.name, u.webhook_url, u.is_active, COALESCE(u.zarya_results, '{}'),
+		       COALESCE(u.body, '{}'), COALESCE(NULLIF(u.content_type, ''), 'application/x-www-form-urlencoded'),
 		       u.last_date_request, u.last_request, u.last_http_status, COALESCE(u.last_response, '')
 		FROM upk u
 		WHERE u.is_active = true
@@ -170,11 +174,15 @@ func (r *PartnerRepo) Create(ctx context.Context, in entity.Partner) (entity.Par
 	}
 	defer tx.Rollback(ctx)
 
+	body, err := marshalPartnerBody(in.Body)
+	if err != nil {
+		return entity.Partner{}, err
+	}
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO upk (name, webhook_url, is_active, zarya_results)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO upk (name, webhook_url, is_active, zarya_results, body, content_type)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, in.Name, in.WebhookURL, in.IsActive, in.ZaryaResults).Scan(&in.ID); err != nil {
+	`, in.Name, in.WebhookURL, in.IsActive, in.ZaryaResults, body, partnerContentType(in.ContentType)).Scan(&in.ID); err != nil {
 		return entity.Partner{}, fmt.Errorf("create partner: %w", err)
 	}
 	if err := replacePartnerRelations(ctx, tx, in.ID, in.RegionIDs, in.StopSourceIDs); err != nil {
@@ -193,11 +201,15 @@ func (r *PartnerRepo) Update(ctx context.Context, in entity.Partner) (entity.Par
 	}
 	defer tx.Rollback(ctx)
 
+	body, err := marshalPartnerBody(in.Body)
+	if err != nil {
+		return entity.Partner{}, err
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE upk
-		SET name = $2, webhook_url = $3, is_active = $4, zarya_results = $5
+		SET name = $2, webhook_url = $3, is_active = $4, zarya_results = $5, body = $6, content_type = $7
 		WHERE id = $1
-	`, in.ID, in.Name, in.WebhookURL, in.IsActive, in.ZaryaResults)
+	`, in.ID, in.Name, in.WebhookURL, in.IsActive, in.ZaryaResults, body, partnerContentType(in.ContentType))
 	if err != nil {
 		return entity.Partner{}, fmt.Errorf("update partner: %w", err)
 	}
@@ -307,12 +319,15 @@ func loadIntGroups(ctx context.Context, pool *pgxpool.Pool, q string, args ...an
 
 func scanPartnerRow(row rowScanner) (entity.Partner, error) {
 	var p entity.Partner
+	var body []byte
 	if err := row.Scan(
 		&p.ID,
 		&p.Name,
 		&p.WebhookURL,
 		&p.IsActive,
 		&p.ZaryaResults,
+		&body,
+		&p.ContentType,
 		&p.LastDateRequest,
 		&p.LastRequest,
 		&p.LastHTTPStatus,
@@ -323,7 +338,43 @@ func scanPartnerRow(row rowScanner) (entity.Partner, error) {
 	if p.ZaryaResults == nil {
 		p.ZaryaResults = []string{}
 	}
+	p.Body = unmarshalPartnerBody(body)
+	if p.ContentType == "" {
+		p.ContentType = entity.PartnerContentTypeForm
+	}
 	p.RegionIDs = []int{}
 	p.StopSourceIDs = []int{}
 	return p, nil
+}
+
+func marshalPartnerBody(in map[string]string) ([]byte, error) {
+	if in == nil {
+		in = map[string]string{}
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return nil, fmt.Errorf("marshal partner body: %w", err)
+	}
+	return raw, nil
+}
+
+func unmarshalPartnerBody(raw []byte) map[string]string {
+	out := map[string]string{}
+	if len(raw) == 0 {
+		return out
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return map[string]string{}
+	}
+	if out == nil {
+		return map[string]string{}
+	}
+	return out
+}
+
+func partnerContentType(v string) string {
+	if v == "" {
+		return entity.PartnerContentTypeForm
+	}
+	return v
 }

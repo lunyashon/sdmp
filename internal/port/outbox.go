@@ -17,3 +17,8 @@ type OutboxRepository interface {
 	Complete(ctx context.Context, token string, id int64) error
 	Release(ctx context.Context, token string) error
 }
+
+type OutboxBx24Repository interface {
+	Claim(ctx context.Context, limit int, staleAfter time.Duration) ([]entity.OutboxBx24, error)
+	Complete(ctx context.Context, uuid string) error
+}

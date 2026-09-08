@@ -85,8 +85,9 @@ func Run() error {
 	splitRepo := postgres.NewSplitRepo(pool)
 	skorozvonProjectRepo := postgres.NewSkorozvonProjectRepo(pool)
 	sourceSvc := usecase.NewSourceService(sourceRepo)
-	leadSvc := usecase.NewLeadService(leadRepo, log)
-	partnerSvc := usecase.NewPartnerService(partnerRepo, usecase.NewPartnerPoster(8*time.Second))
+	partnerPoster := usecase.NewPartnerPoster(8 * time.Second)
+	leadSvc := usecase.NewLeadService(leadRepo, log).WithStorage(storage).WithPartners(partnerRepo, partnerPoster)
+	partnerSvc := usecase.NewPartnerService(partnerRepo, partnerPoster)
 	splitSvc := usecase.NewSplitService(splitRepo, sourceRepo, dictRepo)
 	skorozvonClient := skorozvon.New(skorozvon.Config{
 		Login:  cfg.SkorozvonLogin,

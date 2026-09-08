@@ -154,6 +154,10 @@ func (s *stubLeadRepo) Get(context.Context, int64) (entity.LeadDetail, error) {
 	return entity.LeadDetail{}, nil
 }
 
+func (s *stubLeadRepo) GetByUUID(context.Context, string) (entity.LeadDetail, error) {
+	return entity.LeadDetail{}, nil
+}
+
 func (s *stubLeadRepo) UpdateEnrichment(context.Context, int64, entity.LeadEnrichment) error {
 	return nil
 }
@@ -170,7 +174,19 @@ func (s *stubLeadRepo) BindSkorozvon(context.Context, int64, string, string) err
 	return nil
 }
 
+func (s *stubLeadRepo) BindBitrix(context.Context, string, string) error {
+	return nil
+}
+
 func (s *stubLeadRepo) ApplyCallResult(context.Context, string, entity.LeadCallResult) error {
+	return nil
+}
+
+func (s *stubLeadRepo) ApplyFormResponse(context.Context, string, entity.LeadFormResponse) error {
+	return nil
+}
+
+func (s *stubLeadRepo) InsertFromSkorozvon(context.Context, entity.LeadFromSkorozvon) error {
 	return nil
 }
 

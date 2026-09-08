@@ -25,7 +25,11 @@ func (s *stubPartners) Get(_ context.Context, id int) (entity.Partner, error) {
 	if s.got.ID != 0 {
 		return s.got, nil
 	}
-	return entity.Partner{ID: id, Name: "КР", WebhookURL: "https://kr.test/hook"}, nil
+	return entity.Partner{
+		ID: id, Name: "КР", WebhookURL: "https://kr.test/hook",
+		Body:        map[string]string{"auth": "secret", "phone": "{{phone}}", "tag": "{{region}}"},
+		ContentType: entity.PartnerContentTypeForm,
+	}, nil
 }
 func (s *stubPartners) Create(_ context.Context, in entity.Partner) (entity.Partner, error) {
 	if s.err != nil {
@@ -46,16 +50,18 @@ func (s *stubPartners) UpdateCheck(_ context.Context, id int, _ time.Time, ok bo
 }
 
 type stubPartnerPoster struct {
-	status int
-	body   string
-	err    error
-	url    string
-	form   url.Values
+	status      int
+	body        string
+	err         error
+	url         string
+	form        url.Values
+	contentType string
 }
 
-func (s *stubPartnerPoster) PostForm(_ context.Context, rawURL string, data url.Values) ([]byte, int, error) {
+func (s *stubPartnerPoster) PostForm(_ context.Context, rawURL string, data url.Values, contentType string) ([]byte, int, error) {
 	s.url = rawURL
 	s.form = data
+	s.contentType = contentType
 	return []byte(s.body), s.status, s.err
 }
 
@@ -100,11 +106,43 @@ func TestSendPartnerTest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.OK || got.HTTPStatus != 200 || got.Response != "accepted" || poster.url != "https://kr.test/hook" {
-		t.Fatalf("%+v url=%s", got, poster.url)
+	if !got.OK || got.HTTPStatus != 200 || got.Response != "accepted" {
+		t.Fatalf("%+v", got)
 	}
-	if poster.form.Get("phone") != partnerTestPhone || poster.form.Get("fields[PHONE][0][VALUE]") != partnerTestPhone {
+	if poster.form.Get("phone") != partnerTestPhone || poster.form.Get("tag") != "тест" || poster.form.Get("auth") != "secret" {
 		t.Fatalf("form=%v", poster.form)
+	}
+	if poster.contentType != entity.PartnerContentTypeForm {
+		t.Fatalf("content-type %s", poster.contentType)
+	}
+	u, err := url.Parse(poster.url)
+	if err != nil || u.Host != "kr.test" || u.Query().Get("phone") != partnerTestPhone || u.Query().Get("tag") != "тест" {
+		t.Fatalf("url=%s", poster.url)
+	}
+}
+
+func TestBuildPartnerFormReplacesPlaceholders(t *testing.T) {
+	form := BuildPartnerForm(entity.Partner{Body: map[string]string{
+		"token":       "abc",
+		"name":        "Без имени",
+		"phone":       "{{phone}}",
+		"region":      "{{region}}",
+		"city":        "{{city}}",
+		"phone_valid": "{{phone_valid}}",
+	}}, PartnerVars{Phone: "79001112233", PhoneValid: true, Region: "Москва", City: "Химки"})
+	if form.Get("token") != "abc" || form.Get("name") != "Без имени" {
+		t.Fatalf("static %v", form)
+	}
+	if form.Get("phone") != "79001112233" || form.Get("region") != "Москва" || form.Get("city") != "Химки" || form.Get("phone_valid") != "true" {
+		t.Fatalf("vars %v", form)
+	}
+	got := PartnerRequestURL("https://example.test/hook", form)
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Query().Get("phone") != "79001112233" || u.Query().Get("token") != "abc" {
+		t.Fatalf("query %s", got)
 	}
 }
 

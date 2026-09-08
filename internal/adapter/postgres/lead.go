@@ -2,16 +2,20 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
+	"github.com/lunyashon/sdmp/internal/lib/id"
+	"github.com/lunyashon/sdmp/internal/lib/phone"
 	"github.com/lunyashon/sdmp/internal/port"
 )
 
@@ -50,6 +54,10 @@ func (r *LeadRepo) InsertAccepted(ctx context.Context, row entity.LeadRow, outbo
 		return 0, fmt.Errorf("insert outbox: %w", err)
 	}
 
+	if err := insertLeadEvent(ctx, tx, id, entity.EventAccepted, entity.EventSourceAPI, ""); err != nil {
+		return 0, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit accept txn: %w", err)
 	}
@@ -58,34 +66,67 @@ func (r *LeadRepo) InsertAccepted(ctx context.Context, row entity.LeadRow, outbo
 
 func (r *LeadRepo) UpdateEnrichment(ctx context.Context, leadID int64, in entity.LeadEnrichment) error {
 	_, err := r.pool.Exec(ctx, `
-		UPDATE lead_row
-		SET region_id = $2,
-		    region_source = $3,
-		    operator_id = $4,
-		    operator_source = $5,
-		    child_source_id = $6,
-		    cold_label = NULLIF($7, ''),
-		    base_label = NULLIF($8, ''),
-		    tag = NULLIF($9, ''),
-		    status_id = $10,
-		    updated_at = now()
-		WHERE id = $1
-	`, leadID, in.RegionID, in.RegionSource, in.OperatorID, in.OperatorSource, in.ChildSourceID, in.ColdLabel, in.BaseLabel, in.Tag, in.StatusID)
+		WITH upd AS (
+			UPDATE lead_row
+			SET region_id = $2,
+			    region_source = $3,
+			    operator_id = $4,
+			    operator_source = $5,
+			    child_source_id = $6,
+			    cold_label = NULLIF($7, ''),
+			    base_label = NULLIF($8, ''),
+			    tag = NULLIF($9, ''),
+			    status_id = $10,
+			    updated_at = now()
+			WHERE id = $1
+			RETURNING id
+		)
+		INSERT INTO event (lead_row_id, event_type_id, occurred_at, source)
+		SELECT id, $11, now(), $12 FROM upd
+	`, leadID, in.RegionID, in.RegionSource, in.OperatorID, in.OperatorSource, in.ChildSourceID, in.ColdLabel, in.BaseLabel, in.Tag, in.StatusID, entity.EventEnriched, entity.EventSourceWorker)
 	if err != nil {
 		return fmt.Errorf("update lead enrichment: %w", err)
 	}
 	return nil
 }
 
+func (r *LeadRepo) BindBitrix(ctx context.Context, leadUUID, bitrixLeadID string) error {
+	_, err := r.pool.Exec(ctx, `
+		WITH upd AS (
+			UPDATE lead_row
+			SET bitrix_lead_id = NULLIF($2, ''),
+			    status_id = $3,
+			    updated_at = now()
+			WHERE uuid = $1
+			RETURNING id
+		),
+		ev AS (
+			INSERT INTO event (lead_row_id, event_type_id, occurred_at, source, details)
+			SELECT id, $4, now(), $5, $2 FROM upd
+		)
+		INSERT INTO dispatch (lead_row_id, channel_id, external_id, sent_at, sent_ok, attempts)
+		SELECT id, $6, NULLIF($2, ''), now(), true, 1 FROM upd
+	`, leadUUID, bitrixLeadID, entity.StatusInB24, entity.EventInB24, entity.EventSourceWorker, entity.ChannelBitrix)
+	if err != nil {
+		return fmt.Errorf("bind bitrix: %w", err)
+	}
+	return nil
+}
+
 func (r *LeadRepo) BindSkorozvon(ctx context.Context, leadID int64, skorozvonLeadID, projectID string) error {
 	_, err := r.pool.Exec(ctx, `
-		UPDATE lead_row
-		SET skorozvon_lead_id = NULLIF($2, ''),
-		    project_num = NULLIF($3, ''),
-		    status_id = $4,
-		    updated_at = now()
-		WHERE id = $1
-	`, leadID, skorozvonLeadID, projectID, entity.StatusInSK)
+		WITH upd AS (
+			UPDATE lead_row
+			SET skorozvon_lead_id = NULLIF($2, ''),
+			    project_num = NULLIF($3, ''),
+			    status_id = $4,
+			    updated_at = now()
+			WHERE id = $1
+			RETURNING id
+		)
+		INSERT INTO event (lead_row_id, event_type_id, occurred_at, source, details)
+		SELECT id, $5, now(), $6, NULLIF($2, '') FROM upd
+	`, leadID, skorozvonLeadID, projectID, entity.StatusInSK, entity.EventInSK, entity.EventSourceWorker)
 	if err != nil {
 		return fmt.Errorf("bind skorozvon: %w", err)
 	}
@@ -100,10 +141,9 @@ func (r *LeadRepo) ApplyCallResult(ctx context.Context, skorozvonLeadID string, 
 		    call_last_at = $4,
 		    call_result = $5,
 		    project_num = COALESCE(NULLIF($6, ''), project_num),
-		    status_id = $7,
 		    updated_at = now()
 		WHERE skorozvon_lead_id = $1
-	`, skorozvonLeadID, in.CallID, in.CallURL, in.CallLastAt, in.CallResult, in.ProjectNum, entity.StatusFromSK)
+	`, skorozvonLeadID, in.CallID, in.CallURL, in.CallLastAt, in.CallResult, in.ProjectNum)
 	if err != nil {
 		return fmt.Errorf("apply call result: %w", err)
 	}
@@ -111,6 +151,109 @@ func (r *LeadRepo) ApplyCallResult(ctx context.Context, skorozvonLeadID string, 
 		return domain.ErrNotFound
 	}
 	return nil
+}
+
+func (r *LeadRepo) ApplyFormResponse(ctx context.Context, skorozvonLeadID string, in entity.LeadFormResponse) error {
+	answers, err := json.Marshal(in.Answers)
+	if err != nil {
+		return fmt.Errorf("marshal anketa answers: %w", err)
+	}
+	if in.Answers == nil {
+		answers = []byte("[]")
+	}
+	outboxID, err := id.NewUUID()
+	if err != nil {
+		return fmt.Errorf("outbox_bx24 id: %w", err)
+	}
+
+	var leadUUID string
+	err = r.pool.QueryRow(ctx, `
+		WITH lead AS (
+			SELECT id, uuid, bitrix_lead_id FROM lead_row WHERE skorozvon_lead_id = $1
+		),
+		ins AS (
+			INSERT INTO skorozvon_anketa (
+				lead_row_id, skorozvon_lead_id, call_id, user_id, form_id, scenario_id, form_name, answers, form_updated_at
+			)
+			SELECT lead.id, $1, NULLIF($2, ''), $3, $4, $5, NULLIF($6, ''), $7, $8
+			FROM lead
+			RETURNING id, lead_row_id
+		),
+		updated AS (
+			UPDATE lead_row lr
+			SET skorozvon_anketa_id = ins.id,
+			    status_id = $9,
+			    updated_at = now()
+			FROM ins
+			WHERE lr.id = ins.lead_row_id
+			RETURNING lr.uuid, lr.bitrix_lead_id
+		),
+		queued AS (
+			INSERT INTO outbox_bx24 (uuid, uuid_lead, locked_until)
+			SELECT $10, uuid, NULL
+			FROM updated
+			WHERE bitrix_lead_id IS NULL
+			ON CONFLICT (uuid_lead) DO NOTHING
+			RETURNING uuid_lead
+		),
+		ev AS (
+			INSERT INTO event (lead_row_id, event_type_id, occurred_at, source)
+			SELECT ins.lead_row_id, $11, now(), $12 FROM ins
+		)
+		SELECT u.uuid
+		FROM updated u
+		LEFT JOIN queued q ON q.uuid_lead = u.uuid
+	`, skorozvonLeadID, in.CallID, in.UserID, in.FormID, in.ScenarioID, in.FormName, string(answers), in.UpdatedAt, entity.StatusFromSK, outboxID, entity.EventFromSK, entity.EventSourceSK).Scan(&leadUUID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		return fmt.Errorf("apply form response: %w", err)
+	}
+	return nil
+}
+
+func (r *LeadRepo) InsertFromSkorozvon(ctx context.Context, in entity.LeadFromSkorozvon) error {
+	skorozvonLeadID := strings.TrimSpace(in.SkorozvonLeadID)
+	if skorozvonLeadID == "" {
+		return fmt.Errorf("%w: skorozvon lead id is required", domain.ErrInvalidInput)
+	}
+	uuid, err := id.NewUUID()
+	if err != nil {
+		return fmt.Errorf("lead uuid: %w", err)
+	}
+
+	rawPhone := strings.TrimSpace(in.Phone)
+	phoneVal := rawPhone
+	phoneValid := false
+	if norm, ok := phone.Normalize(rawPhone); ok {
+		phoneVal = norm
+		phoneValid = true
+	}
+
+	created := in.CreatedAt
+	if created.IsZero() {
+		created = time.Now()
+	}
+
+	var leadID int64
+	err = r.pool.QueryRow(ctx, `
+		INSERT INTO lead_row (
+			uuid, phone, phone_valid, city, tag,
+			skorozvon_lead_id, status_id, via_us, source_id, legacy_fields, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6, $7, false, NULL, NULLIF($8, ''), $9, now())
+		ON CONFLICT (skorozvon_lead_id) WHERE skorozvon_lead_id IS NOT NULL DO NOTHING
+		RETURNING id
+	`, uuid, phoneVal, phoneValid, strings.TrimSpace(in.City), strings.TrimSpace(in.Tag),
+		skorozvonLeadID, entity.StatusInSK, strings.TrimSpace(in.LegacyRaw), created).Scan(&leadID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("insert lead from skorozvon: %w", err)
+	}
+	return insertLeadEvent(ctx, r.pool, leadID, entity.EventInSK, entity.EventSourceSK, skorozvonLeadID)
 }
 
 func (r *LeadRepo) InsertDispatch(ctx context.Context, in entity.Dispatch) error {
@@ -390,13 +533,13 @@ func (r *LeadRepo) CountZaryaBySource(ctx context.Context, from, to time.Time) (
 	return out, rows.Err()
 }
 
-func (r *LeadRepo) Get(ctx context.Context, id int64) (entity.LeadDetail, error) {
-	const q = `
+const leadDetailSelect = `
 SELECT
 	lr.id,
 	lr.uuid,
 	lr.phone,
 	lr.phone_valid,
+	lr.via_us,
 	lr.source_id,
 	COALESCE(ps.name, ''),
 	lr.child_source_id,
@@ -453,15 +596,40 @@ LEFT JOIN LATERAL (
 	ORDER BY dr.checked_at DESC
 	LIMIT 1
 ) z ON true
-WHERE lr.id = $1
 `
+
+func (r *LeadRepo) Get(ctx context.Context, id int64) (entity.LeadDetail, error) {
+	d, err := r.getLead(ctx, "lr.id = $1", id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return entity.LeadDetail{}, fmt.Errorf("%w: lead %d", domain.ErrNotFound, id)
+		}
+		return entity.LeadDetail{}, err
+	}
+	return d, nil
+}
+
+func (r *LeadRepo) GetByUUID(ctx context.Context, uuid string) (entity.LeadDetail, error) {
+	d, err := r.getLead(ctx, "lr.uuid = $1", uuid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return entity.LeadDetail{}, fmt.Errorf("%w: lead %s", domain.ErrNotFound, uuid)
+		}
+		return entity.LeadDetail{}, err
+	}
+	return d, nil
+}
+
+func (r *LeadRepo) getLead(ctx context.Context, where string, arg any) (entity.LeadDetail, error) {
+	q := leadDetailSelect + "WHERE " + where
 	var d entity.LeadDetail
 	var callForm, legacy *string
-	err := r.pool.QueryRow(ctx, q, id).Scan(
+	err := r.pool.QueryRow(ctx, q, arg).Scan(
 		&d.ID,
 		&d.UUID,
 		&d.Phone,
 		&d.PhoneValid,
+		&d.ViaUs,
 		&d.SourceID,
 		&d.Source,
 		&d.ChildSourceID,
@@ -496,32 +664,73 @@ WHERE lr.id = $1
 		&d.UPK,
 	)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return entity.LeadDetail{}, fmt.Errorf("%w: lead %d", domain.ErrNotFound, id)
-		}
-		return entity.LeadDetail{}, fmt.Errorf("get lead: %w", err)
+		return entity.LeadDetail{}, err
 	}
 	d.CallFormRaw = deref(callForm)
 	d.LegacyRaw = deref(legacy)
 
-	events, err := r.listEvents(ctx, id)
+	events, err := r.listEvents(ctx, d.ID)
 	if err != nil {
 		return entity.LeadDetail{}, err
 	}
 	d.Events = events
 
-	dispatches, err := r.listDispatches(ctx, id)
+	dispatches, err := r.listDispatches(ctx, d.ID)
 	if err != nil {
 		return entity.LeadDetail{}, err
 	}
 	d.Dispatches = dispatches
 
-	history, err := r.listPhoneHistory(ctx, d.Phone, id)
+	history, err := r.listPhoneHistory(ctx, d.Phone, d.ID)
 	if err != nil {
 		return entity.LeadDetail{}, err
 	}
 	d.PhoneHistory = history
+
+	anketa, err := r.getAnketa(ctx, d.ID)
+	if err != nil {
+		return entity.LeadDetail{}, err
+	}
+	d.Anketa = anketa
 	return d, nil
+}
+
+func (r *LeadRepo) getAnketa(ctx context.Context, leadID int64) (*entity.SkorozvonAnketa, error) {
+	var (
+		out     entity.SkorozvonAnketa
+		answers string
+	)
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, user_id, form_id, scenario_id, COALESCE(form_name, ''), COALESCE(call_id, ''), answers, form_updated_at
+		FROM skorozvon_anketa
+		WHERE lead_row_id = $1
+		ORDER BY id DESC
+		LIMIT 1
+	`, leadID).Scan(
+		&out.ID,
+		&out.UserID,
+		&out.FormID,
+		&out.ScenarioID,
+		&out.FormName,
+		&out.CallID,
+		&answers,
+		&out.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get anketa: %w", err)
+	}
+	if strings.TrimSpace(answers) != "" {
+		if err := json.Unmarshal([]byte(answers), &out.Answers); err != nil {
+			return nil, fmt.Errorf("decode anketa answers: %w", err)
+		}
+	}
+	if out.Answers == nil {
+		out.Answers = []entity.SkorozvonAnketaAnswer{}
+	}
+	return &out, nil
 }
 
 func (r *LeadRepo) listEvents(ctx context.Context, leadID int64) ([]entity.LeadEvent, error) {
@@ -652,6 +861,10 @@ func leadListWhere(f port.LeadListFilter) (string, []any) {
 		p := next(intSlice(f.Sources))
 		b.WriteString(" AND lr.source_id = ANY(" + p + "::int[])")
 	}
+	if len(f.ChildSources) > 0 {
+		p := next(intSlice(f.ChildSources))
+		b.WriteString(" AND lr.child_source_id = ANY(" + p + "::int[])")
+	}
 	if len(f.ColdLabels) > 0 {
 		p := next(f.ColdLabels)
 		b.WriteString(" AND COALESCE(NULLIF(lr.cold_label, ''), s.cold_label) = ANY(" + p + "::text[])")
@@ -708,4 +921,19 @@ func nilIfEmpty(v string) any {
 		return nil
 	}
 	return v
+}
+
+type dbExec interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+func insertLeadEvent(ctx context.Context, exec dbExec, leadID int64, typeID, source int16, details string) error {
+	_, err := exec.Exec(ctx, `
+		INSERT INTO event (lead_row_id, event_type_id, occurred_at, source, details)
+		VALUES ($1, $2, now(), $3, NULLIF($4, ''))
+	`, leadID, typeID, source, details)
+	if err != nil {
+		return fmt.Errorf("insert event: %w", err)
+	}
+	return nil
 }

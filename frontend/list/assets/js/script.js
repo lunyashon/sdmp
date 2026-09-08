@@ -1,6 +1,19 @@
 const PUBLIC_ORIGIN = 'https://cdp-dmp.ru';
 const API = PUBLIC_ORIGIN;
 
+function apiData(body) {
+    if (body && typeof body === 'object' && 'data' in body && 'success' in body) {
+        return body.data;
+    }
+    return body;
+}
+
+function apiError(body, fallback) {
+    if (body && body.data && body.data.error) return body.data.error;
+    if (body && body.error) return body.error;
+    return fallback;
+}
+
 const STAGE_OPTIONS = [
     ['1', 'принята'],
     ['2', 'обогащена'],
@@ -20,6 +33,7 @@ const ZARYA_OPTIONS = [
 const FIELD_CATALOG = [
     { id: 'dateRange', label: 'Дата создания', group: 'Основные', type: 'daterange', pinned: true },
     { id: 'source', label: 'Источник', group: 'Основные', type: 'multiselect', pinned: true, options: [] },
+    { id: 'childSource', label: 'Подисточник', group: 'Основные', type: 'multiselect', pinned: true, options: [] },
     { id: 'baza', label: 'Холодная база', group: 'Источник (JOIN)', type: 'text', pinned: true },
     { id: 'region', label: 'Регион', group: 'lead_row', type: 'multiselect', pinned: true, options: [] },
     { id: 'operator', label: 'Оператор связи', group: 'lead_row', type: 'multiselect', pinned: true, options: [] },
@@ -55,6 +69,7 @@ const COLUMN_CATALOG = [
 ];
 const DEFAULT_COLUMNS = ['date', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'stage', 'zarya', 'upk', 'phone'];
 const COL_PREFS_KEY = 'sdmp.list.colprefs';
+const CARD_PREFS_KEY = 'sdmp.list.cardfields';
 const MIN_COL_WIDTH = 64;
 const DEFAULT_COL_WIDTHS = {
     chk: 36, uuid: 280, date: 150, source: 140, childSource: 160, baza: 140, kakaya: 140,
@@ -81,6 +96,7 @@ const EVENT_SOURCE = { 1: 'Worker', 2: 'Скорозвон', 3: 'API', 4: 'вн�
 
 const CARD_FIELD_CATALOG = [
     { id: 'stage', label: 'Стадия', get: r => esc(r.stage || '—') },
+    { id: 'viaUs', label: 'Через нас', get: r => r.via_us === false ? 'нет (из Скорозвона)' : 'да' },
     { id: 'source', label: 'Источник', get: r => esc(r.source || '—') },
     { id: 'childSource', label: 'Подисточник', get: r => esc(r.child_source || '—') },
     { id: 'baza', label: 'Холодная база', get: r => esc(r.cold_label || '—') },
@@ -113,15 +129,18 @@ const CARD_FIELD_CATALOG = [
     { id: 'createdAt', label: 'Дата создания', get: r => esc(r.created_at || '—') },
     { id: 'updatedAt', label: 'Дата обновления', get: r => esc(r.updated_at || '—') },
 ];
-let cardVisibleFieldIds = ['stage', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'zarya', 'callResult', 'upk', 'uuid'];
+const DEFAULT_CARD_FIELDS = ['stage', 'viaUs', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'zarya', 'callResult', 'upk', 'uuid'];
+let cardVisibleFieldIds = DEFAULT_CARD_FIELDS.slice();
 let currentCardId = null;
 let currentCard = null;
 let dragCardFieldId = null;
 
+const DEFAULT_PAGE_SIZE = 15;
 let pageRows = [];
 let total = 0;
 let page = 1;
-let pageSize = 15;
+let pageSize = DEFAULT_PAGE_SIZE;
+let syncingURL = false;
 let selected = new Set();
 let loading = false;
 let savedFilters = [];
@@ -163,14 +182,26 @@ function setFieldOptions(id, options) {
 
 async function loadCatalogs() {
     const [sourcesRes, regionsRes, operatorsRes] = await Promise.all([
-        fetch(API + '/rest/sources').then(r => r.json()),
-        fetch(API + '/rest/regions').then(r => r.json()),
-        fetch(API + '/rest/operators').then(r => r.json()),
+        fetch(API + '/rest/sources').then(r => r.json()).then(apiData),
+        fetch(API + '/rest/regions').then(r => r.json()).then(apiData),
+        fetch(API + '/rest/operators').then(r => r.json()).then(apiData),
     ]);
     const allSources = sourcesRes.sources || [];
+    const parentById = {};
+    allSources.forEach(s => { parentById[s.id] = s; });
     const parents = allSources.filter(s => !s.parent_id);
     parents.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    const children = allSources.filter(s => s.parent_id);
+    children.sort((a, b) => {
+        const pa = (parentById[a.parent_id] || {}).name || '';
+        const pb = (parentById[b.parent_id] || {}).name || '';
+        return pa.localeCompare(pb, 'ru') || a.name.localeCompare(b.name, 'ru');
+    });
     setFieldOptions('source', parents.map(s => [String(s.id), s.name]));
+    setFieldOptions('childSource', children.map(s => {
+        const p = parentById[s.parent_id];
+        return [String(s.id), p ? (p.name + ' → ' + s.name) : s.name];
+    }));
     setFieldOptions('region', (regionsRes.items || []).map(x => [String(x.id), x.name]));
     setFieldOptions('operator', (operatorsRes.items || []).map(x => [String(x.id), x.name]));
 }
@@ -219,8 +250,8 @@ function msHtml(f) {
         const [val, txt] = Array.isArray(o) ? o : [o, o];
         const checked = selected.has(String(val)) ? 'checked' : '';
         return `<label class="ms-opt" data-text="${esc(String(txt).toLowerCase())}">
-      <input type="checkbox" value="${esc(val)}" ${checked} onchange="toggleMsOpt('${f.id}', this.value, this.checked)">
       <span>${esc(txt)}</span>
+      <input type="checkbox" value="${esc(val)}" ${checked} onchange="toggleMsOpt('${f.id}', this.value, this.checked)">
     </label>`;
     }).join('');
     return `<div class="ms" id="${fieldValueId(f.id)}">
@@ -358,6 +389,7 @@ function buildQuery() {
     params.set('date_from', toApiDate(dates.from || defaultDateFrom(), false));
     params.set('date_to', toApiDate(dates.to || defaultDateTo(), true));
     appendMulti(params, 'sources', getFieldValue('source'));
+    appendMulti(params, 'child_sources', getFieldValue('childSource'));
     const baza = getFieldValue('baza');
     if (baza) params.append('cold_label', baza);
     appendMulti(params, 'region', getFieldValue('region'));
@@ -383,8 +415,9 @@ async function fetchLeads() {
     document.getElementById('total-count').textContent = '…';
     try {
         const res = await fetch(API + '/rest/leads?' + buildQuery().toString());
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || res.statusText);
+        const body = await res.json();
+        if (!res.ok || body.success === false) throw new Error(apiError(body, res.statusText));
+        const data = apiData(body);
         pageRows = data.leads || [];
         total = data.total || 0;
         pageSize = data.limit || pageSize;
@@ -395,6 +428,7 @@ async function fetchLeads() {
     } finally {
         loading = false;
         render();
+        writeListURL();
     }
 }
 
@@ -855,7 +889,7 @@ function render() {
     const tbody = document.getElementById('table-body');
     document.getElementById('total-count').textContent = total.toLocaleString('ru-RU');
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
-    if (page > totalPages) page = totalPages;
+    if (total > 0 && page > totalPages) page = totalPages;
     const startIdx = total === 0 ? 0 : (page - 1) * pageSize;
     document.getElementById('empty-state').style.display = !loading && total === 0 ? 'block' : 'none';
 
@@ -947,22 +981,81 @@ function renderCardFieldPicker() {
 function toggleCardField(id, checked) {
     if (checked && !cardVisibleFieldIds.includes(id)) cardVisibleFieldIds.push(id);
     if (!checked) cardVisibleFieldIds = cardVisibleFieldIds.filter(x => x !== id);
+    saveCardFieldPrefs();
     renderCardFieldPicker();
+    refreshCardMain();
+}
+function moveCardField(srcId, targetId) {
+    if (!srcId || srcId === targetId) return false;
+    if (!cardVisibleFieldIds.includes(srcId) || !cardVisibleFieldIds.includes(targetId)) return false;
+    const from = cardVisibleFieldIds.indexOf(srcId);
+    const to = cardVisibleFieldIds.indexOf(targetId);
+    cardVisibleFieldIds.splice(from, 1);
+    cardVisibleFieldIds.splice(to, 0, srcId);
+    return true;
 }
 function dropCardField(e, targetId) {
     e.preventDefault();
-    if (!dragCardFieldId || dragCardFieldId === targetId) return;
-    if (!cardVisibleFieldIds.includes(dragCardFieldId) || !cardVisibleFieldIds.includes(targetId)) { renderCardFieldPicker(); return; }
-    const from = cardVisibleFieldIds.indexOf(dragCardFieldId);
-    const to = cardVisibleFieldIds.indexOf(targetId);
-    cardVisibleFieldIds.splice(from, 1);
-    cardVisibleFieldIds.splice(to, 0, dragCardFieldId);
+    if (!moveCardField(dragCardFieldId, targetId)) { renderCardFieldPicker(); return; }
     dragCardFieldId = null;
+    saveCardFieldPrefs();
     renderCardFieldPicker();
+    refreshCardMain();
 }
 function resetCardFields() {
-    cardVisibleFieldIds = ['stage', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'zarya', 'callResult', 'upk', 'uuid'];
+    cardVisibleFieldIds = DEFAULT_CARD_FIELDS.slice();
+    saveCardFieldPrefs();
     renderCardFieldPicker();
+    refreshCardMain();
+}
+function loadCardFieldPrefs() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(CARD_PREFS_KEY) || '{}');
+        const known = new Set(CARD_FIELD_CATALOG.map(f => f.id));
+        if (Array.isArray(raw.visible)) {
+            const next = raw.visible.filter(id => known.has(id));
+            if (next.length) cardVisibleFieldIds = next;
+        }
+    } catch (err) { /* ignore broken prefs */ }
+}
+function saveCardFieldPrefs() {
+    try {
+        localStorage.setItem(CARD_PREFS_KEY, JSON.stringify({ visible: cardVisibleFieldIds }));
+    } catch (err) { /* quota / private mode */ }
+}
+function refreshCardMain() {
+    if (currentCard) renderCardMain(currentCard);
+}
+function renderCardMain(r) {
+    const visibleFields = cardVisibleFieldIds.map(id => CARD_FIELD_CATALOG.find(f => f.id === id)).filter(Boolean);
+    document.getElementById('card-main').innerHTML = visibleFields.map(f => `
+        <div class="kv kv-drag" draggable="true" data-fld="${f.id}"
+             ondragstart="onCardKvDragStart(event, '${f.id}')"
+             ondragend="onCardKvDragEnd(event)"
+             ondragover="onCardKvDragOver(event)"
+             ondrop="dropCardField(event, '${f.id}')">
+          <span class="k"><span class="drag-handle">⠿</span>${f.label}</span>
+          <span class="v">${f.get(r)}</span>
+        </div>`).join('')
+        || '<div style="grid-column:1/-1; color:var(--text-muted); font-size:13px;">Все поля скрыты — настройте через ⚙️ Поля.</div>';
+}
+function onCardKvDragStart(e, id) {
+    dragCardFieldId = id;
+    if (e.currentTarget) e.currentTarget.classList.add('dragging');
+    if (e.dataTransfer) e.dataTransfer.setData('text/plain', id);
+}
+function onCardKvDragEnd(e) {
+    if (e.currentTarget) e.currentTarget.classList.remove('dragging');
+    document.querySelectorAll('#card-main .kv-drag.drop-target').forEach(el => el.classList.remove('drop-target'));
+}
+function onCardKvDragOver(e) {
+    e.preventDefault();
+    const el = e.currentTarget;
+    if (!el || el.dataset.fld === dragCardFieldId) return;
+    document.querySelectorAll('#card-main .kv-drag.drop-target').forEach(x => {
+        if (x !== el) x.classList.remove('drop-target');
+    });
+    el.classList.add('drop-target');
 }
 
 function kvHtml(entries) {
@@ -995,18 +1088,23 @@ function renderCard(r) {
     document.getElementById('card-phone').textContent = r.phone || '—';
     document.getElementById('card-sub').textContent = `${r.source || '—'} · создана ${r.created_at || '—'} · ${r.uuid || ('id ' + r.id)}`;
 
-    const visibleFields = cardVisibleFieldIds.map(id => CARD_FIELD_CATALOG.find(f => f.id === id)).filter(Boolean);
-    document.getElementById('card-main').innerHTML = visibleFields.map(f => `<div class="kv"><span class="k">${f.label}</span><span class="v">${f.get(r)}</span></div>`).join('')
-        || '<div style="grid-column:1/-1; color:var(--text-muted); font-size:13px;">Все поля скрыты — настройте через ⚙️ Поля.</div>';
+    renderCardMain(r);
 
+    const anketa = r.skorozvon_anketa;
     const form = r.call_form;
-    if (form && typeof form === 'object' && !Array.isArray(form)) {
+    if (anketa && Array.isArray(anketa.answers) && anketa.answers.length) {
+        const entries = anketa.answers.map(a => [
+            a.question_name || ('вопрос ' + (a.question_id || '')),
+            (a.answer_values || []).filter(Boolean).join(', ') || '—',
+        ]);
+        document.getElementById('card-anketa').innerHTML = kvHtml(entries);
+    } else if (form && typeof form === 'object' && !Array.isArray(form)) {
         const entries = Object.keys(form).map(k => [CALL_FORM_LABELS[k] || k, formatValue(form[k])]);
         document.getElementById('card-anketa').innerHTML = kvHtml(entries);
     } else if (form) {
         document.getElementById('card-anketa').innerHTML = kvHtml([['call_form', formatValue(form)]]);
     } else {
-        document.getElementById('card-anketa').innerHTML = '<div style="grid-column:1/-1; color:var(--text-muted); font-size:13px;">Анкета появится после исхода звонка от Скорозвона.</div>';
+        document.getElementById('card-anketa').innerHTML = '<div style="grid-column:1/-1; color:var(--text-muted); font-size:13px;">Анкета появится после form_response от Скорозвона.</div>';
     }
 
     document.getElementById('card-legacy').innerHTML = kvHtml(objectEntries(r.legacy_fields));
@@ -1014,10 +1112,18 @@ function renderCard(r) {
     const recSection = document.getElementById('card-recording-section');
     if (r.call_url) {
         recSection.style.display = '';
-        const label = r.call_id ? `Прослушать запись (call_id: ${esc(r.call_id)})` : 'Прослушать запись';
-        document.getElementById('card-recording-link').innerHTML = `<a class="raw-link" href="${esc(r.call_url)}" target="_blank" rel="noopener">${label} →</a>`;
+        const player = document.getElementById('card-recording-player');
+        player.innerHTML = `
+      <div class="call-player">
+        <audio class="call-player-audio" controls preload="metadata" src="${esc(r.call_url)}"></audio>
+        <p class="call-player-error" hidden>Не удалось загрузить запись.</p>
+      </div>`;
+        const audio = player.querySelector('audio');
+        const errEl = player.querySelector('.call-player-error');
+        audio.addEventListener('error', () => { errEl.hidden = false; });
     } else {
         recSection.style.display = 'none';
+        document.getElementById('card-recording-player').innerHTML = '';
     }
 
     const history = r.phone_history || [];
@@ -1043,8 +1149,9 @@ function renderCard(r) {
             ok: true,
         });
     });
-    (r.dispatches || []).forEach(d => {
-        const who = d.channel === 'вебхук-партнёр' && d.upk ? `покупатель ${d.upk}` : d.channel;
+    (r.dispatches || []).forEach((d, i) => {
+        const isPartner = d.channel_id === 2 || d.channel === 'вебхук-партнёр';
+        const who = isPartner && d.upk ? `покупатель ${d.upk}` : (d.channel || '');
         const extra = [who, d.project_id, d.external_id ? 'ext ' + d.external_id : ''].filter(Boolean).join(' · ');
         items.push({
             at: d.sent_at,
@@ -1052,22 +1159,43 @@ function renderCard(r) {
             label: 'Отправка: ' + (d.channel || 'канал'),
             detail: extra,
             ok: d.sent_ok,
+            isPartner,
+            partnerId: d.upk_id,
+            raw: d.raw_response || '',
+            httpStatus: d.http_status,
+            idx: i,
         });
     });
     items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
     document.getElementById('card-timeline').innerHTML = items.length
-        ? items.map(e => `<div class="tl-item ${e.type === 'dispatch' ? 'tl-dispatch' : ''}">
+        ? items.map(e => {
+            if (e.type !== 'dispatch') {
+                return `<div class="tl-item">
         <div class="tl-label">${esc(e.label)}<span class="tl-badge ${e.ok ? 'ok' : 'fail'}">${e.ok ? 'ok' : 'ошибка'}</span></div>
         ${e.detail ? `<div class="tl-detail">${esc(e.detail)}</div>` : ''}
         <div class="tl-time">${esc(e.at || '')}</div>
-      </div>`).join('')
+      </div>`;
+            }
+            const canResend = e.isPartner && e.partnerId;
+            const body = [e.httpStatus ? 'HTTP ' + e.httpStatus : '', e.raw].filter(Boolean).join('\n') || 'тело ответа пустое';
+            return `<div class="tl-item tl-dispatch">
+        <div class="tl-label">${esc(e.label)}<span class="tl-badge ${e.ok ? 'ok' : 'fail'}">${e.ok ? 'ok' : 'ошибка'}</span></div>
+        <div class="tl-detail">
+          ${e.isPartner ? `<button type="button" class="tl-chevron" id="tl-chevron-${e.idx}" onclick="toggleDispatchBody(${e.idx})" title="Показать ответ партнёра" aria-expanded="false">▸</button>` : ''}
+          <span>${esc(e.detail || '')}</span>
+          ${canResend ? `<button type="button" class="tl-resend" id="tl-resend-${e.idx}" title="Повторная отправка" aria-label="Повторная отправка" onclick="resendPartner(${e.partnerId}, ${e.idx})"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4.2 10a5.8 5.8 0 0 1 9.7-4.3L15.5 7.2M15.8 10a5.8 5.8 0 0 1-9.7 4.3L4.5 12.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M11.8 7.2h3.7V3.6M8.2 12.8H4.5v3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` : ''}
+        </div>
+        ${e.isPartner ? `<pre class="tl-body" id="tl-body-${e.idx}" hidden>${esc(body)}</pre>` : ''}
+        <div class="tl-time">${esc(e.at || '')}</div>
+      </div>`;
+        }).join('')
         : '<div style="color:var(--text-muted); font-size:13px;">Записей нет</div>';
 
-    const rawSection = document.querySelector('#card-overlay .card-section:last-child');
+    const rawSection = document.getElementById('card-raw-section');
     if (rawSection) {
         if (r.s3_key) {
             rawSection.style.display = '';
-            rawSection.innerHTML = `<h3>Сырьё</h3><span class="raw-link">${esc(r.s3_key)}</span>`;
+            rawSection.innerHTML = `<h3>Сырьё</h3><a class="raw-link" href="javascript:void(0)" onclick="downloadLeadRaw()">${esc(r.s3_key)}</a>`;
         } else {
             rawSection.innerHTML = '<h3>Сырьё</h3><div style="color:var(--text-muted); font-size:13px;">s3_key пустой — у исторических строк сырьё может быть в legacy_fields.</div>';
         }
@@ -1076,26 +1204,180 @@ function renderCard(r) {
     document.getElementById('card-overlay').classList.add('show');
 }
 
+function toggleDispatchBody(idx) {
+    const el = document.getElementById('tl-body-' + idx);
+    const btn = document.getElementById('tl-chevron-' + idx);
+    if (!el) return;
+    const open = el.hidden;
+    el.hidden = !open;
+    if (btn) {
+        btn.classList.toggle('open', open);
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        btn.textContent = open ? '▾' : '▸';
+    }
+}
+
+async function resendPartner(partnerId, idx) {
+    const lead = currentCard;
+    if (!lead || (!lead.id && !lead.uuid) || !partnerId) return;
+    const btn = document.getElementById('tl-resend-' + idx);
+    if (btn) btn.disabled = true;
+    const ref = lead.id || lead.uuid;
+    try {
+        const res = await fetch(API + '/rest/leads/' + encodeURIComponent(ref) + '/partners/' + partnerId + '/resend', { method: 'POST' });
+        const body = await res.json();
+        if (!res.ok || body.success === false) throw new Error(apiError(body, res.statusText));
+        const data = apiData(body) || {};
+        showToast(data.sent_ok ? 'Повторно отправлено партнёру' : 'Партнёр ответил ошибкой');
+        if (lead.uuid) await openCardByUUID(lead.uuid);
+        else await openCard(lead.id);
+    } catch (err) {
+        if (btn) btn.disabled = false;
+        showToast('Не удалось отправить: ' + err.message, true);
+    }
+}
+
+async function downloadLeadRaw() {
+    const lead = currentCard;
+    if (!lead || (!lead.id && !lead.uuid)) {
+        showToast('Нет идентификатора строки для скачивания сырья.', true);
+        return;
+    }
+    const ref = lead.uuid || lead.id;
+    try {
+        const res = await fetch(API + '/rest/leads/' + encodeURIComponent(ref) + '/raw');
+        if (!res.ok) {
+            let message = res.statusText;
+            try {
+                const body = await res.json();
+                message = apiError(body, message);
+            } catch (err) { /* not json */ }
+            throw new Error(message);
+        }
+        const blob = await res.blob();
+        const name = filenameFromDisposition(res.headers.get('Content-Disposition'), (lead.s3_key || 'raw.json').split('/').pop());
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        showToast('Не удалось скачать сырьё: ' + err.message, true);
+    }
+}
+
+function filenameFromDisposition(header, fallback) {
+    const m = String(header || '').match(/filename="([^"]+)"/i);
+    return (m && m[1]) || fallback || 'raw.json';
+}
+
+function knownLeadUUID(id) {
+    const row = pageRows.find(r => r.id === id);
+    if (row && row.uuid) return row.uuid;
+    const hist = (currentCard && currentCard.phone_history) || [];
+    const item = hist.find(x => x.id === id);
+    return item && item.uuid ? item.uuid : '';
+}
+
 async function openCard(id) {
+    stopCardRecording();
     currentCardId = id;
     document.getElementById('card-phone').textContent = 'Загрузка…';
     document.getElementById('card-sub').textContent = 'GET /rest/leads/' + id;
     document.getElementById('card-overlay').classList.add('show');
+    const known = knownLeadUUID(id);
+    if (known) writeListURL(known);
     try {
         const res = await fetch(API + '/rest/leads/' + id);
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || res.statusText);
+        const body = await res.json();
+        if (!res.ok || body.success === false) throw new Error(apiError(body, res.statusText));
+        const data = apiData(body);
         renderCard(data.lead);
+        writeListURL(data.lead.uuid);
     } catch (err) {
         document.getElementById('card-phone').textContent = 'Ошибка';
         document.getElementById('card-sub').textContent = err.message;
         showToast('Не удалось открыть строку: ' + err.message, true);
     }
 }
-function closeCard() { document.getElementById('card-overlay').classList.remove('show'); }
+
+async function openCardByUUID(uuid) {
+    stopCardRecording();
+    document.getElementById('card-phone').textContent = 'Загрузка…';
+    document.getElementById('card-sub').textContent = 'GET /rest/leads/' + uuid;
+    document.getElementById('card-overlay').classList.add('show');
+    writeListURL(uuid);
+    try {
+        const res = await fetch(API + '/rest/leads/' + encodeURIComponent(uuid));
+        const body = await res.json();
+        if (!res.ok || body.success === false) throw new Error(apiError(body, res.statusText));
+        const data = apiData(body);
+        renderCard(data.lead);
+        writeListURL(data.lead.uuid);
+    } catch (err) {
+        document.getElementById('card-phone').textContent = 'Ошибка';
+        document.getElementById('card-sub').textContent = err.message;
+        showToast('Не удалось открыть строку: ' + err.message, true);
+    }
+}
+
+function stopCardRecording() {
+    const audio = document.querySelector('#card-recording-player audio');
+    if (!audio) return;
+    audio.pause();
+}
+
+function closeCard() {
+    stopCardRecording();
+    document.getElementById('card-overlay').classList.remove('show');
+    currentCardId = null;
+    currentCard = null;
+    writeListURL('');
+}
+
+function leadHash() {
+    return decodeURIComponent((location.hash || '').replace(/^#/, '')).trim();
+}
+
+function readListURL() {
+    const q = new URLSearchParams(location.search);
+    const p = parseInt(q.get('page'), 10);
+    if (p >= 1) page = p;
+    const size = parseInt(q.get('page_size'), 10);
+    if (size >= 1) pageSize = size;
+}
+
+function writeListURL(uuid) {
+    const q = new URLSearchParams(location.search);
+    q.set('page', String(Math.max(1, page)));
+    if (pageSize !== DEFAULT_PAGE_SIZE) q.set('page_size', String(pageSize));
+    else q.delete('page_size');
+    const search = q.toString();
+    const hashUUID = uuid === undefined ? leadHash() : String(uuid || '').trim();
+    const hash = hashUUID ? '#' + hashUUID : '';
+    const next = location.pathname + (search ? '?' + search : '') + hash;
+    if (location.pathname + location.search + location.hash === next) return;
+    syncingURL = true;
+    history.replaceState(null, '', next);
+    syncingURL = false;
+}
+
+window.addEventListener('hashchange', () => {
+    if (syncingURL) return;
+    const uuid = leadHash();
+    if (uuid) openCardByUUID(uuid);
+    else if (document.getElementById('card-overlay').classList.contains('show')) closeCard();
+});
 
 (async function init() {
+    readListURL();
+    const sizeSel = document.getElementById('page-size-sel');
+    if (sizeSel) sizeSel.value = String(pageSize);
     loadColumnPrefs();
+    loadCardFieldPrefs();
     renderFiltersGrid();
     render();
     renderSavedFilters();
@@ -1106,4 +1388,6 @@ function closeCard() { document.getElementById('card-overlay').classList.remove(
         showToast('Не загрузились справочники: ' + err.message, true);
     }
     await fetchLeads();
+    const uuid = leadHash();
+    if (uuid) await openCardByUUID(uuid);
 })();

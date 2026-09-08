@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -20,6 +21,9 @@ type LeadAPI interface {
 	EnrichmentStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadEnrichmentStat, error)
 	ZaryaStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadZaryaStat, error)
 	Get(ctx context.Context, id int64) (entity.LeadDetail, error)
+	GetByUUID(ctx context.Context, uuid string) (entity.LeadDetail, error)
+	Raw(ctx context.Context, id int64, uuid string) (usecase.LeadRaw, error)
+	ResendPartner(ctx context.Context, id int64, uuid string, partnerID int) (usecase.PartnerResendResult, error)
 }
 
 type LeadsHandler struct {
@@ -42,20 +46,21 @@ func (h *LeadsHandler) List(c *gin.Context) {
 	}
 
 	res, err := h.svc.Filter(c.Request.Context(), usecase.LeadFilterQuery{
-		DateFrom:   q.DateFrom,
-		DateTo:     q.DateTo,
-		Sources:    q.Sources,
-		ColdLabels: q.ColdLabels,
-		Regions:    q.Regions,
-		Operators:  q.Operators,
-		Statuses:   q.Statuses,
-		Zarya:      q.Zarya,
-		Phone:      q.Phone,
-		City:       q.City,
-		Tag:        q.Tag,
-		CallResult: q.CallResult,
-		Limit:      q.Limit,
-		Offset:     q.Offset,
+		DateFrom:     q.DateFrom,
+		DateTo:       q.DateTo,
+		Sources:      q.Sources,
+		ChildSources: q.ChildSources,
+		ColdLabels:   q.ColdLabels,
+		Regions:      q.Regions,
+		Operators:    q.Operators,
+		Statuses:     q.Statuses,
+		Zarya:        q.Zarya,
+		Phone:        q.Phone,
+		City:         q.City,
+		Tag:          q.Tag,
+		CallResult:   q.CallResult,
+		Limit:        q.Limit,
+		Offset:       q.Offset,
 	})
 	if err != nil {
 		response.HandleError(c, h.log, err)
@@ -67,7 +72,7 @@ func (h *LeadsHandler) List(c *gin.Context) {
 		leads = append(leads, dto.NewLeadDTO(lead))
 	}
 
-	c.JSON(http.StatusOK, dto.LeadsResponse{
+	response.Success(c, dto.LeadsResponse{
 		Count:  len(leads),
 		Total:  res.Total,
 		Limit:  res.Limit,
@@ -86,10 +91,7 @@ func (h *LeadsHandler) IncomingStats(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.LeadSourceCount{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func (h *LeadsHandler) EnrichmentStats(c *gin.Context) {
@@ -102,10 +104,7 @@ func (h *LeadsHandler) EnrichmentStats(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.LeadEnrichmentStat{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func (h *LeadsHandler) ZaryaStats(c *gin.Context) {
@@ -118,10 +117,7 @@ func (h *LeadsHandler) ZaryaStats(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.LeadZaryaStat{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func statsDates(c *gin.Context) (string, string, bool) {
@@ -135,17 +131,91 @@ func statsDates(c *gin.Context) (string, string, bool) {
 }
 
 func (h *LeadsHandler) Get(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || id <= 0 {
+	raw := strings.TrimSpace(c.Param("id"))
+	id, uuid, ok := parseLeadRef(raw)
+	if !ok {
 		response.Error(c, http.StatusBadRequest, "lead id is required")
 		return
 	}
-
-	lead, err := h.svc.Get(c.Request.Context(), id)
+	var (
+		lead entity.LeadDetail
+		err  error
+	)
+	if id > 0 {
+		lead, err = h.svc.Get(c.Request.Context(), id)
+	} else {
+		lead, err = h.svc.GetByUUID(c.Request.Context(), uuid)
+	}
 	if err != nil {
 		response.HandleError(c, h.log, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, dto.LeadDetailResponse{Lead: dto.NewLeadDetailDTO(lead)})
+	response.Success(c, dto.LeadDetailResponse{Lead: dto.NewLeadDetailDTO(lead)})
+}
+
+func (h *LeadsHandler) ResendPartner(c *gin.Context) {
+	raw := strings.TrimSpace(c.Param("id"))
+	id, uuid, ok := parseLeadRef(raw)
+	if !ok {
+		response.Error(c, http.StatusBadRequest, "lead id is required")
+		return
+	}
+	partnerID, err := strconv.Atoi(c.Param("partnerId"))
+	if err != nil || partnerID <= 0 {
+		response.Error(c, http.StatusBadRequest, "partner id is required")
+		return
+	}
+	got, err := h.svc.ResendPartner(c.Request.Context(), id, uuid, partnerID)
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	response.Success(c, got)
+}
+
+func (h *LeadsHandler) Raw(c *gin.Context) {
+	raw := strings.TrimSpace(c.Param("id"))
+	id, uuid, ok := parseLeadRef(raw)
+	if !ok {
+		response.Error(c, http.StatusBadRequest, "lead id is required")
+		return
+	}
+	file, err := h.svc.Raw(c.Request.Context(), id, uuid)
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	name := strings.ReplaceAll(file.Filename, `"`, "")
+	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+	c.Data(http.StatusOK, file.ContentType, file.Body)
+}
+
+func parseLeadRef(raw string) (id int64, uuid string, ok bool) {
+	if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 {
+		return id, "", true
+	}
+	if isLeadUUID(raw) {
+		return 0, raw, true
+	}
+	return 0, "", false
+}
+
+func isLeadUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
 }

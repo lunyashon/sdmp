@@ -3,7 +3,6 @@ package handler_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -74,10 +73,7 @@ func TestCreateSourceToken(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got dto.CreateTokenResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	got := decodeData[dto.CreateTokenResponse](t, w.Body.Bytes())
 	if got.SourceID != 12 || got.Token != "abcdefghijklmnop" {
 		t.Fatalf("%+v", got)
 	}
@@ -95,10 +91,7 @@ func TestListSourcesByToken(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got dto.SourcesResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	got := decodeData[dto.SourcesResponse](t, w.Body.Bytes())
 	if got.Count != 2 {
 		t.Fatalf("%+v", got)
 	}
@@ -125,10 +118,7 @@ func TestCreateChildSource(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got dto.SourceDTO
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	got := decodeData[dto.SourceDTO](t, w.Body.Bytes())
 	if got.ID != 320 || got.Name != "ВР Теле2" || got.ParentID == nil || *got.ParentID != 12 {
 		t.Fatalf("%+v", got)
 	}

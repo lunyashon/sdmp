@@ -2,9 +2,9 @@ package handler_test
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +33,7 @@ type stubLeadFilter struct {
 	q      usecase.LeadFilterQuery
 	res    usecase.LeadFilterResult
 	detail entity.LeadDetail
+	raw    usecase.LeadRaw
 	err    error
 	getErr error
 }
@@ -77,6 +78,43 @@ func (s *stubLeadFilter) Get(_ context.Context, id int64) (entity.LeadDetail, er
 	return s.detail, nil
 }
 
+func (s *stubLeadFilter) GetByUUID(_ context.Context, uuid string) (entity.LeadDetail, error) {
+	if s.getErr != nil {
+		return entity.LeadDetail{}, s.getErr
+	}
+	if s.detail.UUID == "" {
+		s.detail.UUID = uuid
+	}
+	return s.detail, nil
+}
+
+func (s *stubLeadFilter) ResendPartner(_ context.Context, _ int64, _ string, partnerID int) (usecase.PartnerResendResult, error) {
+	if s.getErr != nil {
+		return usecase.PartnerResendResult{}, s.getErr
+	}
+	if s.err != nil {
+		return usecase.PartnerResendResult{}, s.err
+	}
+	return usecase.PartnerResendResult{
+		PartnerID:   partnerID,
+		PartnerName: "КР",
+		SentOK:      true,
+		HTTPStatus:  200,
+		RawResponse: "accepted",
+		Attempts:    1,
+	}, nil
+}
+
+func (s *stubLeadFilter) Raw(_ context.Context, _ int64, _ string) (usecase.LeadRaw, error) {
+	if s.getErr != nil {
+		return usecase.LeadRaw{}, s.getErr
+	}
+	if s.raw.Body == nil {
+		return usecase.LeadRaw{}, domain.ErrNotFound
+	}
+	return s.raw, nil
+}
+
 func leadsRouter(svc *stubLeadFilter) http.Handler {
 	gin.SetMode(gin.TestMode)
 	return httpgin.NewRouter(httpgin.Handlers{
@@ -105,22 +143,19 @@ func TestListLeads(t *testing.T) {
 		}},
 	}}
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/rest/leads?date_from=01.08.2026+00:00:00&date_to=30.08.2026+23:59:59&sources=1&sources=12&cold_label=ВР&region=1&region=5&operator=2&operator=3&zarya=Чистый&zarya=Дубль&phone=79009876539", nil)
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads?date_from=01.08.2026+00:00:00&date_to=30.08.2026+23:59:59&sources=1&sources=12&child_sources=20&cold_label=ВР&region=1&region=5&operator=2&operator=3&zarya=Чистый&zarya=Дубль&phone=79009876539", nil)
 	leadsRouter(svc).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got dto.LeadsResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	got := decodeData[dto.LeadsResponse](t, w.Body.Bytes())
 	if got.Total != 15 || got.Count != 1 || got.Leads[0].Source != "GDMP" || got.Leads[0].ChildSource != "GDMP / МТС" || got.Leads[0].ColdLabel != "ВР" {
 		t.Fatalf("%+v", got)
 	}
 	if got.Leads[0].DateCreate != "27.08.2026 16:27:56" {
 		t.Fatalf("date %q", got.Leads[0].DateCreate)
 	}
-	if len(svc.q.Sources) != 2 || svc.q.Sources[0] != 1 || svc.q.ColdLabels[0] != "ВР" || len(svc.q.Regions) != 2 || svc.q.Regions[1] != 5 {
+	if len(svc.q.Sources) != 2 || svc.q.Sources[0] != 1 || len(svc.q.ChildSources) != 1 || svc.q.ChildSources[0] != 20 || svc.q.ColdLabels[0] != "ВР" || len(svc.q.Regions) != 2 || svc.q.Regions[1] != 5 {
 		t.Fatalf("query %+v", svc.q)
 	}
 	if len(svc.q.Operators) != 2 || svc.q.Operators[1] != 3 || len(svc.q.Zarya) != 2 || svc.q.Zarya[0] != "Чистый" {
@@ -141,15 +176,15 @@ func TestGetLead(t *testing.T) {
 	created := time.Date(2026, 8, 27, 16, 27, 56, 0, time.Local)
 	srcID := 12
 	svc := &stubLeadFilter{detail: entity.LeadDetail{
-		ID:         42,
-		UUID:       "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-		Phone:      "79001234567",
-		PhoneValid: true,
-		SourceID:   &srcID,
-		Source:     "ВонтРезалт",
-		Stage:      "обогащена",
-		StatusID:   2,
-		CreatedAt:  created,
+		ID:          42,
+		UUID:        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Phone:       "79001234567",
+		PhoneValid:  true,
+		SourceID:    &srcID,
+		Source:      "ВонтРезалт",
+		Stage:       "обогащена",
+		StatusID:    2,
+		CreatedAt:   created,
 		CallFormRaw: `{"imya":"Иван","summa_dolga":"150000"}`,
 		Events: []entity.LeadEvent{{
 			TypeID:     1,
@@ -164,10 +199,7 @@ func TestGetLead(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got dto.LeadDetailResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	got := decodeData[dto.LeadDetailResponse](t, w.Body.Bytes())
 	if got.Lead.ID != 42 || got.Lead.Phone != "79001234567" || got.Lead.Source != "ВонтРезалт" {
 		t.Fatalf("%+v", got.Lead)
 	}
@@ -177,6 +209,24 @@ func TestGetLead(t *testing.T) {
 	}
 	if len(got.Lead.Events) != 1 || got.Lead.Events[0].Type != "принята" {
 		t.Fatalf("events %+v", got.Lead.Events)
+	}
+}
+
+func TestGetLeadByUUID(t *testing.T) {
+	svc := &stubLeadFilter{detail: entity.LeadDetail{
+		ID:    42,
+		UUID:  "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Phone: "79001234567",
+	}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", nil)
+	leadsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	got := decodeData[dto.LeadDetailResponse](t, w.Body.Bytes())
+	if got.Lead.ID != 42 || got.Lead.UUID != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Fatalf("%+v", got.Lead)
 	}
 }
 
@@ -196,13 +246,10 @@ func TestIncomingStats(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got struct {
+	got := decodeData[struct {
 		Count int                      `json:"count"`
 		Items []entity.LeadSourceCount `json:"items"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	}](t, w.Body.Bytes())
 	if got.Count != 1 || got.Items[0].SourceID != 1 || got.Items[0].Count != 12 {
 		t.Fatalf("%+v", got)
 	}
@@ -215,13 +262,10 @@ func TestEnrichmentStats(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got struct {
+	got := decodeData[struct {
 		Count int                         `json:"count"`
 		Items []entity.LeadEnrichmentStat `json:"items"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	}](t, w.Body.Bytes())
 	if got.Count != 1 || got.Items[0].Region.Supplier != 6 || got.Items[0].Operator.Provider != 4 {
 		t.Fatalf("%+v", got)
 	}
@@ -234,15 +278,66 @@ func TestZaryaStats(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
-	var got struct {
-		Count int                   `json:"count"`
+	got := decodeData[struct {
+		Count int                    `json:"count"`
 		Items []entity.LeadZaryaStat `json:"items"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	}](t, w.Body.Bytes())
 	if got.Count != 1 || got.Items[0].Unique != 5 || got.Items[0].Dup != 3 {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestGetLeadRaw(t *testing.T) {
+	svc := &stubLeadFilter{raw: usecase.LeadRaw{
+		Filename:    "9822217c-e2ff-4aa4-b16b-005db28a876c.json",
+		ContentType: "application/json",
+		Body:        []byte(`{"phone":"79001234567"}`),
+	}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/42/raw", nil)
+	leadsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("content-type %q", w.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(w.Header().Get("Content-Disposition"), "9822217c-e2ff-4aa4-b16b-005db28a876c.json") {
+		t.Fatalf("disposition %q", w.Header().Get("Content-Disposition"))
+	}
+	if w.Body.String() != `{"phone":"79001234567"}` {
+		t.Fatalf("body %s", w.Body.String())
+	}
+}
+
+func TestGetLeadRawNotFound(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/9/raw", nil)
+	leadsRouter(&stubLeadFilter{getErr: domain.ErrNotFound}).ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+func TestResendPartner(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/leads/42/partners/2/resend", nil)
+	leadsRouter(&stubLeadFilter{}).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	got := decodeData[usecase.PartnerResendResult](t, w.Body.Bytes())
+	if got.PartnerID != 2 || !got.SentOK || got.RawResponse != "accepted" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestResendPartnerBadPartnerID(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/leads/42/partners/0/resend", nil)
+	leadsRouter(&stubLeadFilter{}).ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
 }
 

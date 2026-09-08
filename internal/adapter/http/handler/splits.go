@@ -36,7 +36,7 @@ func (h *SplitsHandler) List(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	response.Items(c, items)
 }
 
 func (h *SplitsHandler) Get(c *gin.Context) {
@@ -50,7 +50,7 @@ func (h *SplitsHandler) Get(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, item)
+	response.Success(c, item)
 }
 
 func (h *SplitsHandler) Replace(c *gin.Context) {
@@ -70,5 +70,5 @@ func (h *SplitsHandler) Replace(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, item)
+	response.Success(c, item)
 }

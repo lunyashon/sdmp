@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,9 +46,12 @@ func NewPartnerPoster(timeout time.Duration) port.HTTPFormPoster {
 	return &partnerFormPoster{http: &http.Client{Timeout: timeout}}
 }
 
-func (p *partnerFormPoster) PostForm(ctx context.Context, rawURL string, data url.Values) ([]byte, int, error) {
+func (p *partnerFormPoster) PostForm(ctx context.Context, rawURL string, data url.Values, contentType string) ([]byte, int, error) {
+	if strings.TrimSpace(contentType) == "" {
+		contentType = entity.PartnerContentTypeForm
+	}
 	return curl.CurlWithContext(ctx, p.http, rawURL, http.MethodPost, strings.NewReader(data.Encode()), map[string]string{
-		"Content-Type": "application/x-www-form-urlencoded",
+		"Content-Type": contentType,
 	})
 }
 
@@ -58,6 +62,8 @@ type PartnerInput struct {
 	ZaryaResults  []string
 	RegionIDs     []int
 	StopSourceIDs []int
+	Body          map[string]string
+	ContentType   string
 }
 
 func (s *PartnerService) List(ctx context.Context) ([]entity.Partner, error) {
@@ -138,7 +144,8 @@ func (s *PartnerService) checkPartner(ctx context.Context, p entity.Partner) (en
 	if s.poster == nil {
 		return entity.PartnerCheck{}, fmt.Errorf("partner http client is not configured")
 	}
-	raw, status, err := s.poster.PostForm(ctx, p.WebhookURL, partnerTestForm())
+	form := BuildPartnerForm(p, PartnerVars{Phone: partnerTestPhone, PhoneValid: true, Region: "тест"})
+	raw, status, err := s.poster.PostForm(ctx, PartnerRequestURL(p.WebhookURL, form), form, PartnerContentType(p))
 	check.HTTPStatus = status
 	check.Response = clipPartnerResponse(raw, err)
 	check.OK = err == nil && status >= 200 && status < 300
@@ -148,16 +155,58 @@ func (s *PartnerService) checkPartner(ctx context.Context, p entity.Partner) (en
 	return check, nil
 }
 
-func partnerTestForm() url.Values {
+type PartnerVars struct {
+	Phone      string
+	PhoneValid bool
+	Region     string
+	City       string
+}
+
+func BuildPartnerForm(p entity.Partner, vars PartnerVars) url.Values {
 	form := url.Values{}
-	form.Set("fields[PHONE][0][VALUE]", partnerTestPhone)
-	form.Set("fields[PHONE][0][VALUE_TYPE]", "WORK")
-	form.Set("fields[ADDRESS_REGION]", "тест")
-	form.Set("fields[STATUS_ID]", entity.StatusEnrichedName)
-	form.Set("fields[COMMENTS]", "sdmp activity check")
-	form.Set("phone", partnerTestPhone)
-	form.Set("PHONE", partnerTestPhone)
+	for k, v := range p.Body {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		form.Set(key, replacePartnerVars(v, vars))
+	}
 	return form
+}
+
+func PartnerRequestURL(rawURL string, form url.Values) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return rawURL
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	for k, vs := range form {
+		for _, v := range vs {
+			q.Set(k, v)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func PartnerContentType(p entity.Partner) string {
+	if t := strings.TrimSpace(p.ContentType); t != "" {
+		return t
+	}
+	return entity.PartnerContentTypeForm
+}
+
+func replacePartnerVars(s string, vars PartnerVars) string {
+	return strings.NewReplacer(
+		"{{region}}", vars.Region,
+		"{{city}}", vars.City,
+		"{{phone}}", vars.Phone,
+		"{{phone_valid}}", strconv.FormatBool(vars.PhoneValid),
+	).Replace(s)
 }
 
 func clipPartnerResponse(raw []byte, err error) string {
@@ -189,6 +238,18 @@ func normalizePartner(id int, in PartnerInput) (entity.Partner, error) {
 	if err != nil {
 		return entity.Partner{}, err
 	}
+	body := map[string]string{}
+	for k, v := range in.Body {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		body[key] = v
+	}
+	contentType := strings.TrimSpace(in.ContentType)
+	if contentType == "" {
+		contentType = entity.PartnerContentTypeForm
+	}
 	return entity.Partner{
 		ID:            id,
 		Name:          name,
@@ -197,6 +258,8 @@ func normalizePartner(id int, in PartnerInput) (entity.Partner, error) {
 		ZaryaResults:  zarya,
 		RegionIDs:     regions,
 		StopSourceIDs: stops,
+		Body:          body,
+		ContentType:   contentType,
 	}, nil
 }
 

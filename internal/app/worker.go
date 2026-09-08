@@ -13,6 +13,7 @@ import (
 	redisadapter "github.com/lunyashon/sdmp/internal/adapter/redis"
 	"github.com/lunyashon/sdmp/internal/adapter/skorozvon"
 	"github.com/lunyashon/sdmp/internal/lib/config"
+	"github.com/lunyashon/sdmp/internal/lib/crm"
 	sl "github.com/lunyashon/sdmp/internal/lib/logger"
 	"github.com/lunyashon/sdmp/internal/lib/phonesearch"
 	"github.com/lunyashon/sdmp/internal/usecase"
@@ -75,7 +76,9 @@ func RunWorker() error {
 		postgres.NewPartnerRepo(pool),
 		log,
 		cfg.Gomaxprocs,
-	).WithSkorozvon(postgres.NewSkorozvonLinkRepo(pool), skorozvonClient)
+	).WithSkorozvon(postgres.NewSkorozvonLinkRepo(pool), skorozvonClient).
+		WithOutboxBx24(postgres.NewOutboxBx24Repo(pool)).
+		WithBx24(crm.New(cfg.SodatechBx24URL, http.DefaultClient))
 
 	log.Info("worker started", "workers", cfg.Gomaxprocs)
 	if err := worker.Run(ctx); err != nil && ctx.Err() == nil {

@@ -42,10 +42,7 @@ func (h *SkorozvonProjectsHandler) List(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.SkorozvonProject{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func (h *SkorozvonProjectsHandler) Create(c *gin.Context) {
@@ -62,7 +59,7 @@ func (h *SkorozvonProjectsHandler) Create(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusCreated, item)
+	response.JSON(c, http.StatusCreated, item)
 }
 
 func (h *SkorozvonProjectsHandler) Refresh(c *gin.Context) {
@@ -71,10 +68,7 @@ func (h *SkorozvonProjectsHandler) Refresh(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.SkorozvonProject{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func (h *SkorozvonProjectsHandler) SendTest(c *gin.Context) {
@@ -83,5 +77,5 @@ func (h *SkorozvonProjectsHandler) SendTest(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"lead_id": leadID})
+	response.LeadID(c, leadID)
 }

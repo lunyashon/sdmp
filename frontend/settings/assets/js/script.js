@@ -21,8 +21,12 @@ function mapSource(s) {
 async function apiJSON(path, opts) {
   const res = await fetch(API + path, opts);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(body.error || res.statusText || 'request failed');
+  if (!res.ok || body.success === false) {
+    const err = (body.data && body.data.error) || body.error || res.statusText || 'request failed';
+    throw new Error(err);
+  }
+  if (body && typeof body === 'object' && 'data' in body && 'success' in body) {
+    return body.data;
   }
   return body;
 }
@@ -81,6 +85,8 @@ function mapPartner(p) {
     last_request: p.last_request,
     last_http_status: p.last_http_status,
     last_response: p.last_response || '',
+    body: p.body && typeof p.body === 'object' ? p.body : {},
+    content_type: p.content_type || 'application/x-www-form-urlencoded',
   };
 }
 
@@ -92,6 +98,8 @@ function partnerPayload(u) {
     zarya_results: u.zarya_results || [],
     region_ids: u.region_ids || [],
     stop_source_ids: u.stop_source_ids || [],
+    body: u.body || {},
+    content_type: u.content_type || 'application/x-www-form-urlencoded',
   };
 }
 
@@ -542,6 +550,8 @@ const PANEL_RENDERERS = {
         <div class="partner-summary-row"><span class="k">Принимает</span><span class="v">${zaryaSummaryLabel(u.zarya_results)}</span></div>
         <div class="partner-summary-row"><span class="k">Регион</span><span class="v">${regions.length ? regions.length + ' в списке' : 'не проверяется'}</span></div>
         <div class="partner-summary-row"><span class="k">Стоп-источники</span><span class="v">${stops.length ? stops.length : 'нет'}</span></div>
+        <div class="partner-summary-row"><span class="k">Параметры</span><span class="v">${Object.keys(u.body || {}).length || 'нет'}</span></div>
+        <div class="partner-summary-row"><span class="k">Content-Type</span><span class="v" style="font-family:monospace; font-size:11.5px;">${u.content_type || 'application/x-www-form-urlencoded'}</span></div>
         <button class="btn btn-sm" style="margin-top:10px; width:100%;" onclick="openPartnerModal(${u.id})">Настроить</button>
       </div>`;
     }
@@ -716,59 +726,35 @@ const PANEL_RENDERERS = {
     };
   },
 
-  regionControl: () => {
-    const rows = rootSources().map(root => `
-      <tr>
-        <td style="font-weight:600;">${root.nazvanie}</td>
-        ${geoStatCells(regionStats, regionRange, root.id, 'region')}
-      </tr>`).join('');
-    return {
-      headers:['Источник','От поставщика','Внешний провайдер','Не определён'],
-      rows, addFn:null,
-      customTop: `
-        <div style="display:flex; align-items:flex-end; gap:8px; margin-bottom:12px;">
-          <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">С</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${regionRange.from}" onchange="setRegionRange('from', this.value)"></div>
-          <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">По</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${regionRange.to}" onchange="setRegionRange('to', this.value)"></div>
-        </div>`,
-      note:'Доли по тому, как воркер проставил регион: от поставщика, через внешний провайдер или не определил. Высокая доля «Не определён» (выделено) — сигнал проверить, шлёт ли источник регион и работает ли провайдер.'
-    };
-  },
+  regionControl: () => enrichmentPanel({
+    tab: 'regionControl',
+    range: regionRange,
+    setFrom: 'setRegionRange',
+    setTo: 'setRegionRange',
+    headers: ['Источник', 'От поставщика', 'Внешний провайдер', 'Не определён'],
+    cellsFn: id => geoStatCells(regionStats, regionRange, id, 'region'),
+    note: 'Доли по тому, как воркер проставил регион: от поставщика, через внешний провайдер или не определил. Высокая доля «Не определён» (выделено) — сигнал проверить, шлёт ли источник регион и работает ли провайдер.',
+  }),
 
-  operatorControl: () => {
-    const rows = rootSources().map(root => `
-      <tr>
-        <td style="font-weight:600;">${root.nazvanie}</td>
-        ${geoStatCells(operatorStats, operatorRange, root.id, 'operator')}
-      </tr>`).join('');
-    return {
-      headers:['Источник','От поставщика','Довыяснено через провайдера','Не определён (в «Другие»)'],
-      rows, addFn:null,
-      customTop: `
-        <div style="display:flex; align-items:flex-end; gap:8px; margin-bottom:12px;">
-          <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">С</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${operatorRange.from}" onchange="setOperatorRange('from', this.value)"></div>
-          <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">По</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${operatorRange.to}" onchange="setOperatorRange('to', this.value)"></div>
-        </div>`,
-      note:'Доли по тому, как воркер проставил оператора. «Не определён» — пустой или несмапленный оператор, он уходит в «Другие». Высокая доля (выделено) — проверить справочник «Операторы».'
-    };
-  },
+  operatorControl: () => enrichmentPanel({
+    tab: 'operatorControl',
+    range: operatorRange,
+    setFrom: 'setOperatorRange',
+    setTo: 'setOperatorRange',
+    headers: ['Источник', 'От поставщика', 'Довыяснено через провайдера', 'Не определён (в «Другие»)'],
+    cellsFn: id => geoStatCells(operatorStats, operatorRange, id, 'operator'),
+    note: 'Доли по тому, как воркер проставил оператора. «Не определён» — пустой или несмапленный оператор, он уходит в «Другие». Высокая доля (выделено) — проверить справочник «Операторы».',
+  }),
 
-  zaryaControl: () => {
-    const rows = rootSources().map(root => `
-      <tr>
-        <td style="font-weight:600;">${root.nazvanie}</td>
-        ${zaryaStatCells(root.id)}
-      </tr>`).join('');
-    return {
-      headers:['Источник','Уник','Дубль'],
-      rows, addFn:null,
-      customTop: `
-        <div style="display:flex; align-items:flex-end; gap:8px; margin-bottom:12px;">
-          <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">С</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${zaryaRange.from}" onchange="setZaryaRange('from', this.value)"></div>
-          <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">По</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${zaryaRange.to}" onchange="setZaryaRange('to', this.value)"></div>
-        </div>`,
-      note:'Последний результат Зари по строке: уник = «Чистый», дубль = всё остальное. Проценты считаются только среди проверенных строк.'
-    };
-  },
+  zaryaControl: () => enrichmentPanel({
+    tab: 'zaryaControl',
+    range: zaryaRange,
+    setFrom: 'setZaryaRange',
+    setTo: 'setZaryaRange',
+    headers: ['Источник', 'Уник', 'Дубль'],
+    cellsFn: id => zaryaStatCells(id),
+    note: 'Последний результат Зари по строке: уник = «Чистый», дубль = всё остальное. Проценты считаются только среди проверенных строк.',
+  }),
 };
 
 let skorozvonBitrixRange = { from: '2026-08-14', to: '2026-08-20' };
@@ -784,6 +770,107 @@ function skorozvonBitrixStatsForRange(sourceId, from, to) {
   const sentNew = Math.round(createdFromSkorozvon * conversionNew / 100);
   return { updated, sentAfterUpdate, conversionUpdate, createdFromSkorozvon, sentNew, conversionNew };
 }
+
+const enrichSourceIds = { regionControl: [], operatorControl: [], zaryaControl: [] };
+
+function visibleEnrichSources(tab) {
+  const roots = rootSources();
+  const ids = enrichSourceIds[tab] || [];
+  if (!ids.length) return roots;
+  const set = new Set(ids.map(Number));
+  return roots.filter(s => set.has(s.id));
+}
+
+function enrichmentPanel(opts) {
+  const sources = visibleEnrichSources(opts.tab);
+  const rows = sources.map(root => `
+      <tr>
+        <td style="font-weight:600; text-align:left;">${escAttr(root.nazvanie)}</td>
+        ${opts.cellsFn(root.id)}
+      </tr>`).join('');
+  return {
+    headers: opts.headers,
+    rows,
+    addFn: null,
+    customTop: enrichmentFiltersHTML(opts),
+    note: opts.note,
+  };
+}
+
+function enrichmentFiltersHTML(opts) {
+  const selected = enrichSourceIds[opts.tab] || [];
+  const sel = new Set(selected.map(String));
+  const roots = rootSources();
+  let label = 'Все источники';
+  if (sel.size === 1) {
+    const one = roots.find(s => String(s.id) === [...sel][0]);
+    label = one ? one.nazvanie : '1 источник';
+  } else if (sel.size > 1) {
+    label = sel.size + ' выбрано';
+  }
+  const optsHtml = roots.map(s => `
+    <label class="ms-opt" data-text="${escAttr(String(s.nazvanie).toLowerCase())}">
+      <span>${escAttr(s.nazvanie)}</span>
+      <input type="checkbox" value="${s.id}" ${sel.has(String(s.id)) ? 'checked' : ''} onchange="toggleEnrichSource('${opts.tab}', ${s.id}, this.checked)">
+    </label>`).join('');
+  return `
+    <div class="enrich-filters">
+      <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">С</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${opts.range.from}" onchange="${opts.setFrom}('from', this.value)"></div>
+      <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">По</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${opts.range.to}" onchange="${opts.setTo}('to', this.value)"></div>
+      <div class="field" style="min-width:240px; flex:1;">
+        <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">Источник</label>
+        <div class="ms" id="enrich-src-${opts.tab}">
+          <button type="button" class="ms-trigger" onclick="toggleEnrichSourceMs('${opts.tab}', event)"><span class="ms-label">${escAttr(label)}</span></button>
+          <span class="ms-caret">▾</span>
+          <div class="ms-drop" onclick="event.stopPropagation()">
+            <input type="text" class="ms-search" placeholder="Поиск..." oninput="filterEnrichSourceMs('${opts.tab}', this.value)">
+            <div class="ms-opts">${optsHtml || '<div class="ms-empty">Нет источников</div>'}</div>
+            <div class="ms-foot"><button type="button" class="btn" onclick="clearEnrichSource('${opts.tab}')">Все источники</button></div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function toggleEnrichSourceMs(tab, e) {
+  e.stopPropagation();
+  const el = document.getElementById('enrich-src-' + tab);
+  if (!el) return;
+  const open = el.classList.contains('open');
+  document.querySelectorAll('.ms.open').forEach(x => x.classList.remove('open'));
+  if (!open) el.classList.add('open');
+}
+
+function filterEnrichSourceMs(tab, query) {
+  const el = document.getElementById('enrich-src-' + tab);
+  if (!el) return;
+  const q = (query || '').toLowerCase();
+  el.querySelectorAll('.ms-opt').forEach(opt => {
+    opt.classList.toggle('hidden', Boolean(q) && !(opt.dataset.text || '').includes(q));
+  });
+}
+
+function toggleEnrichSource(tab, id, checked) {
+  const cur = (enrichSourceIds[tab] || []).slice();
+  const i = cur.indexOf(id);
+  if (checked && i < 0) cur.push(id);
+  if (!checked && i >= 0) cur.splice(i, 1);
+  enrichSourceIds[tab] = cur;
+  renderPanels();
+  requestAnimationFrame(() => {
+    const el = document.getElementById('enrich-src-' + tab);
+    if (el) el.classList.add('open');
+  });
+}
+
+function clearEnrichSource(tab) {
+  enrichSourceIds[tab] = [];
+  renderPanels();
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.ms.open').forEach(x => x.classList.remove('open'));
+});
 
 let regionRange = defaultIncomingRange();
 let operatorRange = defaultIncomingRange();
@@ -1642,6 +1729,8 @@ function enterPartnerEditMode() {
     regions: (u.region_ids || []).slice(),
     stops: (u.stop_source_ids || []).slice(),
     zarya_results: (u.zarya_results || []).slice(),
+    body: partnerBodyPairs(u.body),
+    content_type: u.content_type || 'application/x-www-form-urlencoded',
   };
   renderPartnerModal();
 }
@@ -1657,6 +1746,39 @@ function draftPartnerRegionAdd(region) { if (region && !partnerDraft.regions.inc
 function draftPartnerRegionRemove(region) { partnerDraft.regions = partnerDraft.regions.filter(r => r !== region); renderPartnerModal(); }
 function draftPartnerStopAdd(sourceId) { if (!partnerDraft.stops.includes(sourceId)) { partnerDraft.stops.push(sourceId); renderPartnerModal(); } }
 function draftPartnerStopRemove(sourceId) { partnerDraft.stops = partnerDraft.stops.filter(s => s !== sourceId); renderPartnerModal(); }
+function partnerBodyPairs(body) {
+  const keys = Object.keys(body || {});
+  if (!keys.length) return [{ key: '', value: '' }];
+  return keys.map(k => ({ key: k, value: body[k] == null ? '' : String(body[k]) }));
+}
+function partnerBodyObject(pairs) {
+  const out = {};
+  (pairs || []).forEach(p => {
+    const k = String(p.key || '').trim();
+    if (k) out[k] = p.value == null ? '' : String(p.value);
+  });
+  return out;
+}
+function draftPartnerBodyField(i, field, value) {
+  if (!partnerDraft.body[i]) partnerDraft.body[i] = { key: '', value: '' };
+  partnerDraft.body[i][field] = value;
+}
+function draftPartnerBodyAdd() {
+  partnerDraft.body.push({ key: '', value: '' });
+  renderPartnerModal();
+}
+function draftPartnerBodyRemove(i) {
+  partnerDraft.body.splice(i, 1);
+  if (!partnerDraft.body.length) partnerDraft.body.push({ key: '', value: '' });
+  renderPartnerModal();
+}
+function partnerBodyViewHTML(body) {
+  const entries = Object.entries(body || {});
+  if (!entries.length) return '<span class="cell-static">нет</span>';
+  return `<div class="partner-body-view">${entries.map(([k, v]) =>
+    `<div class="partner-body-line"><code>${escAttr(k)}</code><span>=</span><span>${escAttr(String(v))}</span></div>`
+  ).join('')}</div>`;
+}
 function draftPartnerZaryaToggle(value, checked) {
   if (checked) { if (!partnerDraft.zarya_results.includes(value)) partnerDraft.zarya_results.push(value); }
   else { partnerDraft.zarya_results = partnerDraft.zarya_results.filter(v => v !== value); }
@@ -1686,6 +1808,8 @@ function renderPartnerModal() {
       <div class="partner-field"><label>Что принимает</label><span class="cell-static">${zaryaSummaryLabel(u.zarya_results)}</span></div>
       <div class="partner-field"><label>Регион</label><span class="cell-static">${regions.length ? regions.join(', ') : 'не проверяется'}</span></div>
       <div class="partner-field"><label>Стоп-источники</label><span class="cell-static">${stops.length ? stops.join(', ') : 'нет'}</span></div>
+      <div class="partner-field"><label>Параметры (GET + POST)</label>${partnerBodyViewHTML(u.body)}</div>
+      <div class="partner-field"><label>Content-Type</label><span class="cell-static" style="font-family:monospace; font-size:12px;">${escAttr(u.content_type || 'application/x-www-form-urlencoded')}</span></div>
     `;
     return;
   }
@@ -1726,6 +1850,22 @@ function renderPartnerModal() {
       </div>
       <div style="margin-top:6px; width:220px;">${comboHTML(cAddStop, '', '+ добавить стоп-источник')}</div>
     </div>
+    <div class="partner-field">
+      <label>Параметры (GET + POST) ${helpIcon('Одни и те же пары уходят и в query URL, и в тело POST. Плейсхолдеры как в БД: {{phone}}, {{phone_valid}}, {{region}} (название), {{city}}.')}</label>
+      <div class="partner-body-rows">
+        ${(partnerDraft.body || []).map((row, i) => `
+          <div class="partner-body-row">
+            <input class="cell-input" style="border:1px solid var(--border-strong); font-family:monospace; font-size:12px;" placeholder="ключ" value="${escAttr(row.key)}" onchange="draftPartnerBodyField(${i}, 'key', this.value)">
+            <input class="cell-input" style="border:1px solid var(--border-strong); font-family:monospace; font-size:12px;" placeholder="значение" value="${escAttr(row.value)}" onchange="draftPartnerBodyField(${i}, 'value', this.value)">
+            <button type="button" class="del-btn" title="Удалить" onclick="draftPartnerBodyRemove(${i})">&times;</button>
+          </div>`).join('')}
+      </div>
+      <button type="button" class="btn btn-sm" style="margin-top:6px;" onclick="draftPartnerBodyAdd()">+ параметр</button>
+    </div>
+    <div class="partner-field">
+      <label>Content-Type ${helpIcon('Заголовок тела POST. Для текущих партнёров — application/x-www-form-urlencoded.')}</label>
+      <input class="cell-input" style="border:1px solid var(--border-strong); font-family:monospace; font-size:12px;" value="${escAttr(partnerDraft.content_type || 'application/x-www-form-urlencoded')}" onchange="draftPartnerField('content_type', this.value)">
+    </div>
   `;
 }
 
@@ -1742,6 +1882,12 @@ function applyPartnerDraft() {
   if (JSON.stringify(beforeZarya.slice().sort()) !== JSON.stringify(partnerDraft.zarya_results.slice().sort())) changes.push(`Что принимает: [${zaryaSummaryLabel(beforeZarya)}] → [${zaryaSummaryLabel(partnerDraft.zarya_results)}]`);
   if (JSON.stringify(beforeRegions) !== JSON.stringify(afterRegions)) changes.push(`Регионы: [${beforeRegions.join(', ')||'—'}] → [${afterRegions.join(', ')||'—'}]`);
   if (JSON.stringify(beforeStops.sort()) !== JSON.stringify(afterStops.slice().sort())) changes.push(`Стоп-источники: [${beforeStops.join(', ')||'—'}] → [${afterStops.join(', ')||'—'}]`);
+  const beforeBody = JSON.stringify(u.body || {});
+  const afterBody = JSON.stringify(partnerBodyObject(partnerDraft.body));
+  if (beforeBody !== afterBody) changes.push('Параметры запроса изменены');
+  const beforeCT = u.content_type || 'application/x-www-form-urlencoded';
+  const afterCT = partnerDraft.content_type || 'application/x-www-form-urlencoded';
+  if (beforeCT !== afterCT) changes.push(`Content-Type: ${beforeCT} → ${afterCT}`);
 
   customConfirm(
     `Применить изменения для покупателя «${u.nazvanie}»?\n\n` +
@@ -1760,6 +1906,8 @@ function applyPartnerDraft() {
             zarya_results: partnerDraft.zarya_results || [],
             region_ids: partnerDraft.regions || [],
             stop_source_ids: partnerDraft.stops || [],
+            body: partnerBodyObject(partnerDraft.body),
+            content_type: partnerDraft.content_type || 'application/x-www-form-urlencoded',
           }),
         });
         await loadPartners();

@@ -34,12 +34,14 @@ func NewPartnersHandler(svc PartnerAPI, log *slog.Logger) *PartnersHandler {
 }
 
 type partnerBody struct {
-	Name          string   `json:"name"`
-	WebhookURL    string   `json:"webhook_url"`
-	IsActive      *bool    `json:"is_active"`
-	ZaryaResults  []string `json:"zarya_results"`
-	RegionIDs     []int    `json:"region_ids"`
-	StopSourceIDs []int    `json:"stop_source_ids"`
+	Name          string            `json:"name"`
+	WebhookURL    string            `json:"webhook_url"`
+	IsActive      *bool             `json:"is_active"`
+	ZaryaResults  []string          `json:"zarya_results"`
+	RegionIDs     []int             `json:"region_ids"`
+	StopSourceIDs []int             `json:"stop_source_ids"`
+	Body          map[string]string `json:"body"`
+	ContentType   string            `json:"content_type"`
 }
 
 func (h *PartnersHandler) List(c *gin.Context) {
@@ -48,10 +50,7 @@ func (h *PartnersHandler) List(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.Partner{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func (h *PartnersHandler) Create(c *gin.Context) {
@@ -64,7 +63,7 @@ func (h *PartnersHandler) Create(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusCreated, item)
+	response.JSON(c, http.StatusCreated, item)
 }
 
 func (h *PartnersHandler) Update(c *gin.Context) {
@@ -82,7 +81,7 @@ func (h *PartnersHandler) Update(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, item)
+	response.Success(c, item)
 }
 
 func (h *PartnersHandler) Refresh(c *gin.Context) {
@@ -91,10 +90,7 @@ func (h *PartnersHandler) Refresh(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.PartnerCheck{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func (h *PartnersHandler) SendTest(c *gin.Context) {
@@ -108,7 +104,7 @@ func (h *PartnersHandler) SendTest(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, item)
+	response.Success(c, item)
 }
 
 func bindPartner(c *gin.Context, create bool) (usecase.PartnerInput, bool) {
@@ -130,5 +126,7 @@ func bindPartner(c *gin.Context, create bool) (usecase.PartnerInput, bool) {
 		ZaryaResults:  req.ZaryaResults,
 		RegionIDs:     req.RegionIDs,
 		StopSourceIDs: req.StopSourceIDs,
+		Body:          req.Body,
+		ContentType:   req.ContentType,
 	}, true
 }

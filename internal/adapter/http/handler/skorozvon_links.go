@@ -45,10 +45,7 @@ func (h *SkorozvonLinksHandler) List(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	if items == nil {
-		items = []entity.SkorozvonLink{}
-	}
-	c.JSON(http.StatusOK, gin.H{"count": len(items), "items": items})
+	response.List(c, items)
 }
 
 func (h *SkorozvonLinksHandler) Create(c *gin.Context) {
@@ -61,7 +58,7 @@ func (h *SkorozvonLinksHandler) Create(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusCreated, item)
+	response.JSON(c, http.StatusCreated, item)
 }
 
 func (h *SkorozvonLinksHandler) Update(c *gin.Context) {
@@ -79,7 +76,7 @@ func (h *SkorozvonLinksHandler) Update(c *gin.Context) {
 		response.HandleError(c, h.log, err)
 		return
 	}
-	c.JSON(http.StatusOK, item)
+	response.Success(c, item)
 }
 
 func bindSkorozvonLink(c *gin.Context) (usecase.SkorozvonLinkInput, bool) {

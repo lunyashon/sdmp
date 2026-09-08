@@ -85,20 +85,21 @@ type LeadDTO struct {
 }
 
 type LeadsQuery struct {
-	DateFrom   string
-	DateTo     string
-	Sources    []int
-	ColdLabels []string
-	Regions    []int
-	Operators  []int
-	Statuses   []int
-	Zarya      []string
-	Phone      string
-	City       string
-	Tag        string
-	CallResult *int32
-	Limit      int
-	Offset     int
+	DateFrom     string
+	DateTo       string
+	Sources      []int
+	ChildSources []int
+	ColdLabels   []string
+	Regions      []int
+	Operators    []int
+	Statuses     []int
+	Zarya        []string
+	Phone        string
+	City         string
+	Tag          string
+	CallResult   *int32
+	Limit        int
+	Offset       int
 }
 
 type LeadsResponse struct {
@@ -140,8 +141,9 @@ func ParseLeadsQuery(q url.Values) (LeadsQuery, error) {
 	out := LeadsQuery{
 		DateFrom:   strings.TrimSpace(q.Get("date_from")),
 		DateTo:     strings.TrimSpace(q.Get("date_to")),
-		Sources:    queryInts(q, "sources"),
-		ColdLabels: queryStrings(q, "cold_label"),
+		Sources:      queryInts(q, "sources"),
+		ChildSources: queryInts(q, "child_sources"),
+		ColdLabels:   queryStrings(q, "cold_label"),
 		Regions:    queryInts(q, "region"),
 		Operators:  queryInts(q, "operator"),
 		Statuses:   queryInts(q, "status"),
@@ -269,6 +271,7 @@ type LeadDetailDTO struct {
 	UUID              string                `json:"uuid"`
 	Phone             string                `json:"phone"`
 	PhoneValid        bool                  `json:"phone_valid"`
+	ViaUs             bool                  `json:"via_us"`
 	SourceID          *int                  `json:"source_id"`
 	Source            string                `json:"source"`
 	ChildSourceID     *int                  `json:"child_source_id"`
@@ -304,6 +307,25 @@ type LeadDetailDTO struct {
 	Events            []LeadEventDTO        `json:"events"`
 	Dispatches        []LeadDispatchDTO     `json:"dispatches"`
 	PhoneHistory      []LeadPhoneHistoryDTO `json:"phone_history"`
+	SkorozvonAnketa   *SkorozvonAnketaDTO   `json:"skorozvon_anketa"`
+}
+
+type SkorozvonAnketaAnswerDTO struct {
+	QuestionID   int64    `json:"question_id"`
+	QuestionName string   `json:"question_name"`
+	AnswerID     int64    `json:"answer_id"`
+	AnswerValues []string `json:"answer_values"`
+}
+
+type SkorozvonAnketaDTO struct {
+	ID         int64                      `json:"id"`
+	UserID     *int64                     `json:"user_id"`
+	FormID     *int64                     `json:"form_id"`
+	ScenarioID *int64                     `json:"scenario_id"`
+	FormName   string                     `json:"form_name"`
+	CallID     string                     `json:"call_id"`
+	UpdatedAt  string                     `json:"updated_at,omitempty"`
+	Answers    []SkorozvonAnketaAnswerDTO `json:"answers"`
 }
 
 type LeadDetailResponse struct {
@@ -353,6 +375,7 @@ func NewLeadDetailDTO(l entity.LeadDetail) LeadDetailDTO {
 		UUID:              l.UUID,
 		Phone:             l.Phone,
 		PhoneValid:        l.PhoneValid,
+		ViaUs:             l.ViaUs,
 		SourceID:          l.SourceID,
 		Source:            l.Source,
 		ChildSourceID:     l.ChildSourceID,
@@ -388,5 +411,35 @@ func NewLeadDetailDTO(l entity.LeadDetail) LeadDetailDTO {
 		Events:            events,
 		Dispatches:        dispatches,
 		PhoneHistory:      history,
+		SkorozvonAnketa:   newSkorozvonAnketaDTO(l.Anketa),
+	}
+}
+
+func newSkorozvonAnketaDTO(a *entity.SkorozvonAnketa) *SkorozvonAnketaDTO {
+	if a == nil {
+		return nil
+	}
+	answers := make([]SkorozvonAnketaAnswerDTO, 0, len(a.Answers))
+	for _, ans := range a.Answers {
+		vals := ans.AnswerValues
+		if vals == nil {
+			vals = []string{}
+		}
+		answers = append(answers, SkorozvonAnketaAnswerDTO{
+			QuestionID:   ans.QuestionID,
+			QuestionName: ans.QuestionName,
+			AnswerID:     ans.AnswerID,
+			AnswerValues: vals,
+		})
+	}
+	return &SkorozvonAnketaDTO{
+		ID:         a.ID,
+		UserID:     a.UserID,
+		FormID:     a.FormID,
+		ScenarioID: a.ScenarioID,
+		FormName:   a.FormName,
+		CallID:     a.CallID,
+		UpdatedAt:  formatLeadTimePtr(a.UpdatedAt),
+		Answers:    answers,
 	}
 }

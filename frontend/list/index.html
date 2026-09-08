@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Архив строчек DMP</title>
-<link rel="stylesheet" href="assets/css/style.css?v=4">
+<link rel="stylesheet" href="assets/css/style.css?v=13">
 </head>
 <body>
 <div class="wrap">
@@ -105,16 +105,16 @@
                 <div class="col-picker-list" id="card-field-picker-list"></div>
                 <div class="col-picker-foot">
                   <button class="btn" style="height:26px; padding:0 8px; font-size:12px;" onclick="resetCardFields()">Сбросить</button>
-                  <button class="btn btn-primary" style="height:26px; padding:0 10px; font-size:12px;" onclick="document.getElementById('card-field-picker').classList.remove('show'); openCard(currentCardId)">Готово</button>
+                  <button class="btn btn-primary" style="height:26px; padding:0 10px; font-size:12px;" onclick="document.getElementById('card-field-picker').classList.remove('show')">Готово</button>
                 </div>
               </div>
             </div>
           </div>
           <div class="kv-grid" id="card-main"></div>
         </div>
-        <div class="card-section"><h3>Анкета (call_form)</h3><div class="kv-grid" id="card-anketa"></div></div>
+        <div class="card-section"><h3>Анкета</h3><div class="kv-grid" id="card-anketa"></div></div>
         <div class="card-section"><h3>Таймлайн</h3><div class="timeline" id="card-timeline"></div></div>
-        <div class="card-section" id="card-recording-section" style="display:none;"><h3>Запись звонка</h3><span class="raw-link" id="card-recording-link"></span></div>
+        <div class="card-section" id="card-recording-section" style="display:none;"><h3>Запись звонка</h3><div id="card-recording-player"></div></div>
         <div class="card-section" id="card-history-section" style="display:none;"><h3>Другие строки с этим номером</h3><div id="card-history"></div></div>
         <div class="card-section">
           <details>
@@ -122,13 +122,13 @@
             <div class="kv-grid" id="card-legacy" style="margin-top:10px;"></div>
           </details>
         </div>
-        <div class="card-section"><h3>Сырьё</h3><span class="raw-link" onclick="alert('В реальном сервисе — GET по syrye_key из S3')">Открыть исходный JSON из S3 →</span></div>
+        <div class="card-section" id="card-raw-section"><h3>Сырьё</h3><div style="color:var(--text-muted); font-size:13px;">s3_key пустой — у исторических строк сырьё может быть в legacy_fields.</div></div>
       </div>
     </div>
   </div>
 
 </div>
 
-<script src="assets/js/script.js?v=12"></script>
+<script src="assets/js/script.js?v=25"></script>
 </body>
 </html>

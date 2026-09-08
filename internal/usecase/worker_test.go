@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/lunyashon/sdmp/internal/domain/entity"
+	"github.com/lunyashon/sdmp/internal/lib/crm"
 	"github.com/lunyashon/sdmp/internal/lib/phonesearch"
 	"github.com/lunyashon/sdmp/internal/port"
 )
@@ -48,6 +50,161 @@ func (s *stubOutbox) Release(_ context.Context, token string) error {
 	return nil
 }
 
+type stubOutboxBx24 struct {
+	items     []entity.OutboxBx24
+	claimErr  error
+	limit     int
+	stale     time.Duration
+	n         int
+	completed []string
+}
+
+func (s *stubOutboxBx24) Complete(_ context.Context, uuid string) error {
+	s.completed = append(s.completed, uuid)
+	return nil
+}
+
+func (s *stubOutboxBx24) Claim(_ context.Context, limit int, staleAfter time.Duration) ([]entity.OutboxBx24, error) {
+	s.n++
+	s.limit = limit
+	s.stale = staleAfter
+	if s.claimErr != nil {
+		return nil, s.claimErr
+	}
+	return s.items, nil
+}
+
+func TestProcessBx24ClaimsUnlocked(t *testing.T) {
+	box := &stubOutboxBx24{items: []entity.OutboxBx24{
+		{UUID: "task-1", LeadUUID: "lead-aaa"},
+		{UUID: "task-2", LeadUUID: "lead-bbb"},
+	}}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, nil, nil, nil, nil, 1).WithOutboxBx24(box)
+	n, err := svc.ProcessBx24(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || box.n != 1 || box.stale != 5*time.Minute {
+		t.Fatalf("n=%d calls=%d stale=%s", n, box.n, box.stale)
+	}
+}
+
+func TestProcessBx24EmptyWithoutRepo(t *testing.T) {
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, nil, nil, nil, nil, 1)
+	n, err := svc.ProcessBx24(context.Background())
+	if err != nil || n != 0 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+}
+
+type stubBx24 struct {
+	id      int64
+	raw     []byte
+	err     error
+	addID   int64
+	addRaw  []byte
+	addErr  error
+	keys    []string
+	payload []byte
+}
+
+func (s *stubBx24) SearchLead(_ context.Context, key string) (crm.LeadSearchResult, error) {
+	s.keys = append(s.keys, key)
+	return crm.LeadSearchResult{ID: s.id, Raw: s.raw}, s.err
+}
+
+func (s *stubBx24) AddLead(_ context.Context, payload []byte) (crm.LeadAddResult, error) {
+	s.payload = append([]byte(nil), payload...)
+	return crm.LeadAddResult{ID: s.addID, Raw: s.addRaw, Status: 200}, s.addErr
+}
+
+func TestProcessBx24BindsWhenFound(t *testing.T) {
+	box := &stubOutboxBx24{items: []entity.OutboxBx24{
+		{UUID: "task-1", LeadUUID: "lead-aaa"},
+	}}
+	leads := &stubLeads{}
+	api := &stubBx24{id: 51037210991, raw: []byte(`{"result":51037210991}`)}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxBx24(box).
+		WithBx24(api)
+
+	n, err := svc.ProcessBx24(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(api.keys) != 1 || api.keys[0] != "lead-aaa" {
+		t.Fatalf("keys %v", api.keys)
+	}
+	if len(leads.bitrixBinds) != 1 || leads.bitrixBinds[0] != [2]string{"lead-aaa", "51037210991"} {
+		t.Fatalf("binds %v", leads.bitrixBinds)
+	}
+	if len(box.completed) != 1 || box.completed[0] != "task-1" {
+		t.Fatalf("completed %v", box.completed)
+	}
+}
+
+func TestProcessBx24AddsWhenMissing(t *testing.T) {
+	box := &stubOutboxBx24{items: []entity.OutboxBx24{
+		{UUID: "task-1", LeadUUID: "lead-aaa"},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{
+		UUID:     "lead-aaa",
+		Phone:    "79001234567",
+		Region:   "Москва",
+		City:     "Химки",
+		Operator: "БИЛАЙН",
+	}}
+	api := &stubBx24{id: 0, raw: []byte(`{"result":0}`), addID: 77, addRaw: []byte(`{"result":77}`)}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxBx24(box).
+		WithBx24(api)
+
+	n, err := svc.ProcessBx24(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(api.payload) == 0 {
+		t.Fatal("add not called")
+	}
+	if string(api.payload) == "" || !containsAll(string(api.payload), "79001234567", "UF_CRM_1788705605", "lead-aaa", "Москва", "Химки", "БИЛАЙН") {
+		t.Fatalf("payload %s", api.payload)
+	}
+	if len(leads.bitrixBinds) != 1 || leads.bitrixBinds[0] != [2]string{"lead-aaa", "77"} {
+		t.Fatalf("binds %v", leads.bitrixBinds)
+	}
+	if len(box.completed) != 1 || box.completed[0] != "task-1" {
+		t.Fatalf("completed %v", box.completed)
+	}
+}
+
+func TestProcessBx24KeepsWhenAddFails(t *testing.T) {
+	box := &stubOutboxBx24{items: []entity.OutboxBx24{
+		{UUID: "task-1", LeadUUID: "lead-aaa"},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{UUID: "lead-aaa", Phone: "79001234567"}}
+	api := &stubBx24{id: 0, addErr: errors.New("timeout")}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxBx24(box).
+		WithBx24(api)
+
+	n, err := svc.ProcessBx24(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(leads.bitrixBinds) != 0 || len(box.completed) != 0 {
+		t.Fatalf("binds %v completed %v", leads.bitrixBinds, box.completed)
+	}
+}
+
+func containsAll(s string, parts ...string) bool {
+	for _, p := range parts {
+		if !strings.Contains(s, p) {
+			return false
+		}
+	}
+	return true
+}
+
 func TestProcessEmpty(t *testing.T) {
 	box := &stubOutbox{}
 	svc := NewWorkerService(box, nil, nil, nil, nil, nil, nil, 1)
@@ -78,9 +235,32 @@ func TestProcessCompletesAfterHandle(t *testing.T) {
 	}
 }
 
+func TestProcessInvalidPhoneWritesDispatchAndCompletes(t *testing.T) {
+	box := &stubOutbox{msgs: []entity.OutboxMessage{
+		{ID: 49, LeadRowID: 12317807, SourceID: 2, Payload: `{"fields":{"PHONE":"dgdfgdfg"}}`},
+		{ID: 50, LeadRowID: 11, SourceID: 2, Payload: `{"fields":{"PHONE":"79001234567"}}`},
+	}}
+	leads := &stubLeads{}
+	svc := NewWorkerService(box, nil, nil, leads, nil, nil, nil, 1)
+	n, err := svc.Process(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || len(box.completed) != 2 {
+		t.Fatalf("n=%d completed=%v", n, box.completed)
+	}
+	if len(leads.dispatches) != 1 {
+		t.Fatalf("dispatches %+v", leads.dispatches)
+	}
+	d := leads.dispatches[0]
+	if d.LeadRowID != 12317807 || d.SentOK || d.RawResponse != "invalid phone number: dgdfgdfg" {
+		t.Fatalf("%+v", d)
+	}
+}
+
 func TestProcessReleasesOnHandleError(t *testing.T) {
 	box := &stubOutbox{msgs: []entity.OutboxMessage{
-		{ID: 1, LeadRowID: 10, Payload: `{}`},
+		{ID: 1, LeadRowID: 10, Payload: `{`},
 	}}
 	svc := NewWorkerService(box, nil, nil, nil, nil, nil, nil, 1)
 	if _, err := svc.Process(context.Background()); err == nil {
@@ -144,14 +324,16 @@ func (s stubDicts) OperatorByName(_ context.Context, name string) (int, bool, er
 
 type stubLeads struct {
 	stubLeadList
-	mu              sync.Mutex
-	got             entity.LeadEnrichment
-	leadID          int64
-	dispatches      []entity.Dispatch
-	skorozvonBinds  [][3]string
-	zaryaLeadID     int64
-	zaryaDup        bool
-	zaryaSaved      bool
+	mu             sync.Mutex
+	got            entity.LeadEnrichment
+	leadID         int64
+	dispatches     []entity.Dispatch
+	skorozvonBinds [][3]string
+	bitrixBinds    [][2]string
+	byUUID         entity.LeadDetail
+	zaryaLeadID    int64
+	zaryaDup       bool
+	zaryaSaved     bool
 }
 
 func (s *stubLeads) BindSkorozvon(_ context.Context, leadID int64, skorozvonLeadID, projectID string) error {
@@ -159,6 +341,21 @@ func (s *stubLeads) BindSkorozvon(_ context.Context, leadID int64, skorozvonLead
 	defer s.mu.Unlock()
 	s.skorozvonBinds = append(s.skorozvonBinds, [3]string{strconv.FormatInt(leadID, 10), skorozvonLeadID, projectID})
 	return nil
+}
+
+func (s *stubLeads) BindBitrix(_ context.Context, leadUUID, bitrixLeadID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bitrixBinds = append(s.bitrixBinds, [2]string{leadUUID, bitrixLeadID})
+	return nil
+}
+
+func (s *stubLeads) GetByUUID(_ context.Context, uuid string) (entity.LeadDetail, error) {
+	d := s.byUUID
+	if d.UUID == "" {
+		d.UUID = uuid
+	}
+	return d, nil
 }
 
 func (s *stubLeads) UpdateEnrichment(_ context.Context, leadID int64, in entity.LeadEnrichment) error {
@@ -506,7 +703,7 @@ type stubPoster struct {
 	calls    int
 }
 
-func (s *stubPoster) PostForm(_ context.Context, rawURL string, data url.Values) ([]byte, int, error) {
+func (s *stubPoster) PostForm(_ context.Context, rawURL string, data url.Values, _ string) ([]byte, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.urls = append(s.urls, rawURL)
@@ -521,8 +718,8 @@ func (s *stubPoster) PostForm(_ context.Context, rawURL string, data url.Values)
 
 func TestHandleSendsPartnersInParallel(t *testing.T) {
 	partners := &stubRoutePartners{items: []entity.Partner{
-		{ID: 1, Name: "РТ", WebhookURL: "https://rt.test/hook"},
-		{ID: 2, Name: "КР", WebhookURL: "https://kr.test/hook"},
+		{ID: 1, Name: "РТ", WebhookURL: "https://rt.test/hook", Body: map[string]string{"token": "rt", "phone": "{{phone}}"}},
+		{ID: 2, Name: "КР", WebhookURL: "https://kr.test/hook", Body: map[string]string{"auth": "kr", "phone": "{{phone}}", "tag": "{{region}}"}},
 	}}
 	poster := &stubPoster{statuses: []int{200, 200}}
 	leads := &stubLeads{}
@@ -551,17 +748,21 @@ func TestHandleSendsPartnersInParallel(t *testing.T) {
 	if len(poster.urls) != 2 {
 		t.Fatalf("urls %v", poster.urls)
 	}
-	if poster.body.Get("fields[PHONE][0][VALUE]") != "79001234567" {
+	if poster.body.Get("phone") != "79001234567" {
 		t.Fatalf("phone %v", poster.body)
 	}
-	if poster.body.Get("fields[PHONE][0][VALUE_TYPE]") != "WORK" {
-		t.Fatalf("type %v", poster.body)
+	hasQuery := false
+	for _, raw := range poster.urls {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("url %s: %v", raw, err)
+		}
+		if u.Query().Get("phone") == "79001234567" {
+			hasQuery = true
+		}
 	}
-	if poster.body.Get("fields[ADDRESS_REGION]") != "Москва" {
-		t.Fatalf("region %v", poster.body)
-	}
-	if poster.body.Get("fields[STATUS_ID]") != entity.StatusEnrichedName {
-		t.Fatalf("status %v", poster.body)
+	if !hasQuery {
+		t.Fatalf("urls %v", poster.urls)
 	}
 	if len(leads.dispatches) != 2 || !leads.dispatches[0].SentOK {
 		t.Fatalf("dispatch %+v", leads.dispatches)

@@ -48,6 +48,8 @@ type Config struct {
 	SkorozvonAppID  string
 	SkorozvonAppKey string
 
+	SodatechBx24URL string
+
 	Gomaxprocs int
 }
 
@@ -109,6 +111,7 @@ func getConfig() *Config {
 		SkorozvonAPIKey:     envString("SKOROZVON_API_KEY", ""),
 		SkorozvonAppID:      envString("SKOROZVON_APP_ID", ""),
 		SkorozvonAppKey:     envString("SKOROZVON_APP_KEY", ""),
+		SodatechBx24URL:     envString("SODATECH_BX24_URL", ""),
 	}
 }
 
