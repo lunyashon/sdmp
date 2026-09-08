@@ -7,6 +7,8 @@ services:
     container_name: sdmp-api
     env_file:
       - config/.env
+    environment:
+      TZ: Europe/Moscow
     network_mode: host
     volumes:
       - ./config/.env:/app/config/.env
@@ -21,6 +23,8 @@ services:
     container_name: sdmp-worker
     env_file:
       - config/.env
+    environment:
+      TZ: Europe/Moscow
     network_mode: host
     volumes:
       - ./config/.env:/app/config/.env

@@ -13,6 +13,7 @@ import (
 
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
+	"github.com/lunyashon/sdmp/internal/lib/clock"
 	"github.com/lunyashon/sdmp/internal/lib/id"
 	"github.com/lunyashon/sdmp/internal/port"
 )
@@ -58,7 +59,7 @@ func NewReceiveLeadService(
 		storage: storage,
 		cache:   cache,
 		log:     log,
-		now:     time.Now,
+		now:     clock.Now,
 		uuid:    id.NewUUID,
 	}
 }

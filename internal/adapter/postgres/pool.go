@@ -21,7 +21,7 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 
 func DSN(host, port, user, password, dbname string) string {
 	return fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable TimeZone=Europe/Moscow",
 		host, port, user, password, dbname,
 	)
 }

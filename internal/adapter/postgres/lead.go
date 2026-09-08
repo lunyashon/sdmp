@@ -14,6 +14,7 @@ import (
 
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
+	"github.com/lunyashon/sdmp/internal/lib/clock"
 	"github.com/lunyashon/sdmp/internal/lib/id"
 	"github.com/lunyashon/sdmp/internal/lib/phone"
 	"github.com/lunyashon/sdmp/internal/port"
@@ -331,7 +332,9 @@ func (r *LeadRepo) InsertFromSkorozvon(ctx context.Context, in entity.LeadFromSk
 
 	created := in.CreatedAt
 	if created.IsZero() {
-		created = time.Now()
+		created = clock.Now()
+	} else {
+		created = created.In(clock.Location)
 	}
 
 	var leadID int64

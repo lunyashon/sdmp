@@ -10,6 +10,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/sdmp-worker ./cmd/wor
 
 FROM gcr.io/distroless/static-debian12
 
+ENV TZ=Europe/Moscow
+
 WORKDIR /app
 
 COPY --from=builder /out/sdmp-worker /app/sdmp-worker

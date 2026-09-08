@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lunyashon/sdmp/internal/domain/entity"
+	"github.com/lunyashon/sdmp/internal/lib/clock"
 	"github.com/lunyashon/sdmp/internal/usecase"
 )
 
@@ -237,7 +238,7 @@ func formatLeadTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.Local).Format(usecase.LeadDateLayout)
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, clock.Location).Format(usecase.LeadDateLayout)
 }
 
 func formatLeadTimePtr(t *time.Time) string {
