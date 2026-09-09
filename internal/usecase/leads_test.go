@@ -127,6 +127,7 @@ func TestFilterLeads(t *testing.T) {
 		Zarya:        []string{"Чистый", "Дубль"},
 		Phone:        "8 (900) 987-65-39",
 		ViaUs:        boolPtr(false),
+		IDs:          []int64{42},
 		Limit:        0,
 	})
 	if err != nil {
@@ -146,6 +147,24 @@ func TestFilterLeads(t *testing.T) {
 	}
 	if repo.got.ViaUs == nil || *repo.got.ViaUs {
 		t.Fatalf("via_us %+v", repo.got.ViaUs)
+	}
+	if len(repo.got.IDs) != 1 || repo.got.IDs[0] != 42 {
+		t.Fatalf("ids %+v", repo.got.IDs)
+	}
+}
+
+func TestFilterLeadsStripsPhoneSpaces(t *testing.T) {
+	repo := &stubLeadList{}
+	_, err := NewLeadService(repo, nil).Filter(context.Background(), LeadFilterQuery{
+		DateFrom: "01.08.2026 00:00:00",
+		DateTo:   "30.08.2026 23:59:59",
+		Phone:    "7 900 987 65 39",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.got.Phone != "79009876539" {
+		t.Fatalf("phone %q", repo.got.Phone)
 	}
 }
 

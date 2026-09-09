@@ -72,19 +72,20 @@ func (r *LeadRepo) UpdateEnrichment(ctx context.Context, leadID int64, in entity
 			SET region_id = $2,
 			    region_source = $3,
 			    operator_id = $4,
-			    operator_source = $5,
-			    child_source_id = $6,
-			    cold_label = NULLIF($7, ''),
-			    base_label = NULLIF($8, ''),
-			    tag = NULLIF($9, ''),
-			    status_id = $10,
+			    operator_raw = NULLIF($5, ''),
+			    operator_source = $6,
+			    child_source_id = $7,
+			    cold_label = NULLIF($8, ''),
+			    base_label = NULLIF($9, ''),
+			    tag = NULLIF($10, ''),
+			    status_id = $11,
 			    updated_at = now()
 			WHERE id = $1
 			RETURNING id
 		)
 		INSERT INTO event (lead_row_id, event_type_id, occurred_at, source)
-		SELECT id, $11, now(), $12 FROM upd
-	`, leadID, in.RegionID, in.RegionSource, in.OperatorID, in.OperatorSource, in.ChildSourceID, in.ColdLabel, in.BaseLabel, in.Tag, in.StatusID, entity.EventEnriched, entity.EventSourceWorker)
+		SELECT id, $12, now(), $13 FROM upd
+	`, leadID, in.RegionID, in.RegionSource, in.OperatorID, in.OperatorRaw, in.OperatorSource, in.ChildSourceID, in.ColdLabel, in.BaseLabel, in.Tag, in.StatusID, entity.EventEnriched, entity.EventSourceWorker)
 	if err != nil {
 		return fmt.Errorf("update lead enrichment: %w", err)
 	}
@@ -855,6 +856,7 @@ func (r *LeadRepo) listAnketaFields(ctx context.Context, leadID int64) ([]entity
 		SELECT
 			f.field_id,
 			COALESCE(mf.name, ''),
+			COALESCE(mf.bitrix_code, ''),
 			f.enum_id,
 			COALESCE(mo.name, '')
 		FROM skorozvon_anketa_fields f
@@ -871,7 +873,7 @@ func (r *LeadRepo) listAnketaFields(ctx context.Context, leadID int64) ([]entity
 	out := make([]entity.SkorozvonAnketaFieldItem, 0)
 	for rows.Next() {
 		var item entity.SkorozvonAnketaFieldItem
-		if err := rows.Scan(&item.FieldID, &item.FieldName, &item.EnumID, &item.EnumName); err != nil {
+		if err := rows.Scan(&item.FieldID, &item.FieldName, &item.BitrixCode, &item.EnumID, &item.EnumName); err != nil {
 			return nil, fmt.Errorf("scan anketa field: %w", err)
 		}
 		out = append(out, item)
@@ -1033,12 +1035,14 @@ JOIN source s ON s.id = COALESCE(lr.child_source_id, lr.source_id)`
 func leadListWhere(f port.LeadListFilter) (string, []any) {
 	var b strings.Builder
 	args := make([]any, 0, 8)
-	b.WriteString("WHERE lr.created_at >= $1 AND lr.created_at <= $2")
-	args = append(args, f.DateFrom, f.DateTo)
-
 	next := func(v any) string {
 		args = append(args, v)
 		return fmt.Sprintf("$%d", len(args))
+	}
+	if len(f.IDs) > 0 {
+		b.WriteString("WHERE lr.id = ANY(" + next(f.IDs) + "::bigint[])")
+	} else {
+		b.WriteString("WHERE lr.created_at >= " + next(f.DateFrom) + " AND lr.created_at <= " + next(f.DateTo))
 	}
 
 	if len(f.Sources) > 0 {

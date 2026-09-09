@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/lunyashon/sdmp/internal/adapter/http/dto"
 	"github.com/lunyashon/sdmp/internal/adapter/http/response"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
 )
@@ -33,6 +34,13 @@ func NewDictsHandler(svc DictAPI, log *slog.Logger) *DictsHandler {
 	return &DictsHandler{svc: svc, log: log}
 }
 
+// Regions
+// @Summary      Регионы
+// @Tags         dicts
+// @Produce      json
+// @Success      200 {object} response.SuccessEnvelope{data=dto.NamedRefList}
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/regions [get]
 func (h *DictsHandler) Regions(c *gin.Context) {
 	items, err := h.svc.ListRegions(c.Request.Context())
 	if err != nil {
@@ -42,6 +50,13 @@ func (h *DictsHandler) Regions(c *gin.Context) {
 	response.List(c, items)
 }
 
+// Statuses
+// @Summary      Стадии
+// @Tags         dicts
+// @Produce      json
+// @Success      200 {object} response.SuccessEnvelope{data=dto.NamedRefList}
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/statuses [get]
 func (h *DictsHandler) Statuses(c *gin.Context) {
 	items, err := h.svc.ListStatuses(c.Request.Context())
 	if err != nil {
@@ -51,6 +66,13 @@ func (h *DictsHandler) Statuses(c *gin.Context) {
 	response.List(c, items)
 }
 
+// Operators
+// @Summary      Операторы и верхний маппинг
+// @Tags         dicts
+// @Produce      json
+// @Success      200 {object} response.SuccessEnvelope{data=dto.OperatorGroupList}
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/operators [get]
 func (h *DictsHandler) Operators(c *gin.Context) {
 	items, err := h.svc.ListOperatorGroups(c.Request.Context())
 	if err != nil {
@@ -60,15 +82,24 @@ func (h *DictsHandler) Operators(c *gin.Context) {
 	response.List(c, items)
 }
 
+// AddOperatorAlias
+// @Summary      Добавить алиас оператора
+// @Tags         dicts
+// @Accept       json
+// @Param        id   path int true "ID оператора"
+// @Param        body body dto.OperatorAliasRequest true "Алиас"
+// @Success      204 {string} string
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/operators/{id}/aliases [post]
 func (h *DictsHandler) AddOperatorAlias(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		response.Error(c, http.StatusBadRequest, "operator id is required")
 		return
 	}
-	var req struct {
-		Alias string `json:"alias"`
-	}
+	var req dto.OperatorAliasRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(c, http.StatusBadRequest, "invalid json")
 		return
@@ -84,6 +115,16 @@ func (h *DictsHandler) AddOperatorAlias(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// RemoveOperatorAlias
+// @Summary      Удалить алиас оператора
+// @Tags         dicts
+// @Param        id    path  int    true "ID оператора"
+// @Param        alias query string true "Алиас"
+// @Success      204 {string} string
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/operators/{id}/aliases [delete]
 func (h *DictsHandler) RemoveOperatorAlias(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {

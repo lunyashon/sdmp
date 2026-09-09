@@ -30,6 +30,13 @@ func NewSplitsHandler(svc SplitAPI, log *slog.Logger) *SplitsHandler {
 	return &SplitsHandler{svc: svc, log: log}
 }
 
+// List
+// @Summary      Все правила дробления
+// @Tags         splits
+// @Produce      json
+// @Success      200 {object} response.SuccessEnvelope{data=dto.SourceSplitItems}
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/splits [get]
 func (h *SplitsHandler) List(c *gin.Context) {
 	items, err := h.svc.List(c.Request.Context())
 	if err != nil {
@@ -39,6 +46,16 @@ func (h *SplitsHandler) List(c *gin.Context) {
 	response.Items(c, items)
 }
 
+// Get
+// @Summary      Дробление источника
+// @Tags         splits
+// @Produce      json
+// @Param        id path int true "ID источника"
+// @Success      200 {object} response.SuccessEnvelope{data=entity.SourceSplit}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources/{id}/split [get]
 func (h *SplitsHandler) Get(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -53,6 +70,18 @@ func (h *SplitsHandler) Get(c *gin.Context) {
 	response.Success(c, item)
 }
 
+// Replace
+// @Summary      Заменить дробление источника
+// @Tags         splits
+// @Accept       json
+// @Produce      json
+// @Param        id   path int true "ID источника"
+// @Param        body body entity.SourceSplit true "Правила"
+// @Success      200 {object} response.SuccessEnvelope{data=entity.SourceSplit}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources/{id}/split [put]
 func (h *SplitsHandler) Replace(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {

@@ -36,6 +36,13 @@ func NewSourcesHandler(svc SourceAPI, log *slog.Logger) *SourcesHandler {
 	return &SourcesHandler{svc: svc, log: log}
 }
 
+// List
+// @Summary      Источники
+// @Tags         sources
+// @Produce      json
+// @Success      200 {object} response.SuccessEnvelope{data=dto.SourcesResponse}
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources [get]
 func (h *SourcesHandler) List(c *gin.Context) {
 	items, err := h.svc.List(c.Request.Context())
 	if err != nil {
@@ -45,6 +52,16 @@ func (h *SourcesHandler) List(c *gin.Context) {
 	response.Success(c, sourcesResponse(items))
 }
 
+// CreateToken
+// @Summary      Выпустить токен источника
+// @Tags         sources
+// @Produce      json
+// @Param        id path int true "ID корневого источника"
+// @Success      200 {object} response.SuccessEnvelope{data=dto.CreateTokenResponse}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources/{id}/token [post]
 func (h *SourcesHandler) CreateToken(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -64,6 +81,15 @@ func (h *SourcesHandler) CreateToken(c *gin.Context) {
 	})
 }
 
+// DeleteToken
+// @Summary      Отозвать токен источника
+// @Tags         sources
+// @Param        id path int true "ID источника"
+// @Success      204 {string} string
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources/{id}/token [delete]
 func (h *SourcesHandler) DeleteToken(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -77,6 +103,18 @@ func (h *SourcesHandler) DeleteToken(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// CreateChild
+// @Summary      Создать подисточник
+// @Tags         sources
+// @Accept       json
+// @Produce      json
+// @Param        id   path int true "ID родителя"
+// @Param        body body dto.CreateChildSourceRequest true "Подисточник"
+// @Success      201 {object} response.SuccessEnvelope{data=dto.SourceDTO}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources/{id}/children [post]
 func (h *SourcesHandler) CreateChild(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -105,6 +143,15 @@ func (h *SourcesHandler) CreateChild(c *gin.Context) {
 	response.JSON(c, http.StatusCreated, dto.NewSourceDTO(src))
 }
 
+// ListByToken
+// @Summary      Источники по токену
+// @Tags         sources
+// @Produce      json
+// @Param        token path string true "Токен"
+// @Success      200 {object} response.SuccessEnvelope{data=dto.SourcesResponse}
+// @Failure      401 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources/by-token/{token} [get]
 func (h *SourcesHandler) ListByToken(c *gin.Context) {
 	items, err := h.svc.ListByToken(c.Request.Context(), c.Param("token"))
 	if err != nil {
@@ -114,6 +161,15 @@ func (h *SourcesHandler) ListByToken(c *gin.Context) {
 	response.Success(c, sourcesResponse(items))
 }
 
+// Delete
+// @Summary      Удалить источник
+// @Tags         sources
+// @Param        id path int true "ID источника"
+// @Success      204 {string} string
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources/{id} [delete]
 func (h *SourcesHandler) Delete(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -127,6 +183,18 @@ func (h *SourcesHandler) Delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// SetActive
+// @Summary      Включить или выключить источник
+// @Tags         sources
+// @Accept       json
+// @Produce      json
+// @Param        id   path int true "ID источника"
+// @Param        body body dto.UpdateSourceActiveRequest true "is_active"
+// @Success      200 {object} response.SuccessEnvelope{data=dto.SourceDTO}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources/{id} [patch]
 func (h *SourcesHandler) SetActive(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {

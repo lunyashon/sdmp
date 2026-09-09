@@ -1,0 +1,311 @@
+basePath: /
+definitions:
+  dto.CRMLeadAddFields:
+    properties:
+      NAME:
+        example: Иван
+        type: string
+      PHONE:
+        items:
+          $ref: '#/definitions/dto.CRMLeadPhone'
+        type: array
+      SOURCE_ID:
+        example: GDMP
+        type: string
+      TITLE:
+        example: Лид
+        type: string
+      UF_CRM_1766149282:
+        example: подтверждён
+        type: string
+      UF_CRM_1699340770806:
+        example: "12345"
+        type: string
+      UF_CRM_1734523005552:
+        example: МТС
+        type: string
+      UF_CRM_1747216350206:
+        example: Москва
+        type: string
+      UF_CRM_1752577998838:
+        example: web-123
+        type: string
+    type: object
+  dto.CRMLeadAddRequest:
+    properties:
+      PHONE:
+        description: PHONE на корне, если нет fields.PHONE.
+        example: "79001234567"
+        type: string
+      SOURCE_ID:
+        description: SOURCE_ID на корне, если нет fields.SOURCE_ID.
+        example: GDMP
+        type: string
+      UF_CRM_1752577998838:
+        description: WebID на корне, если нет fields.UF_CRM_1752577998838.
+        type: string
+      fields:
+        $ref: '#/definitions/dto.CRMLeadAddFields'
+    type: object
+  dto.CRMLeadPhone:
+    properties:
+      VALUE:
+        example: "79001234567"
+        type: string
+      VALUE_TYPE:
+        example: WORK
+        type: string
+    type: object
+  response.BitrixErrorBody:
+    properties:
+      error:
+        type: string
+      error_description:
+        type: string
+    type: object
+  response.BitrixOK:
+    properties:
+      result:
+        type: integer
+      time:
+        $ref: '#/definitions/response.BitrixTime'
+    type: object
+  response.BitrixTime:
+    properties:
+      date_finish:
+        type: string
+      date_start:
+        type: string
+      duration:
+        type: number
+      finish:
+        type: number
+      processing:
+        type: number
+      start:
+        type: number
+    type: object
+info:
+  contact: {}
+  description: Приём лида в формате Битрикс. JSON, form-urlencoded, multipart и query.
+    user_id в пути должен быть 1. token — токен источника из настроек. PHONE обязателен.
+    SOURCE_ID, если передан, должен совпасть с bitrix_code источника. Остальные fields
+    сохраняются в сырьё; worker читает оператор, регион и тег.
+  title: SDMP crm.lead.add
+  version: "0.1"
+paths:
+  /rest/{user_id}/{token}/crm.lead.add:
+    get:
+      consumes:
+      - application/json
+      - application/x-www-form-urlencoded
+      - multipart/form-data
+      description: 'user_id=1. token — токен источника. PHONE обязателен: строка "79001234567"
+        или массив {VALUE,VALUE_TYPE}. SOURCE_ID должен совпасть с bitrix_code, если
+        оба заданы. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552
+        — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806
+        — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form:
+        fields[PHONE][0][VALUE]=79001234567'
+      parameters:
+      - description: Всегда 1
+        in: path
+        name: user_id
+        required: true
+        type: string
+      - description: Токен источника
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: JSON. Либо form/query с теми же ключами
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/dto.CRMLeadAddRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.BitrixOK'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+      summary: crm.lead.add
+      tags:
+      - crm.lead.add
+    post:
+      consumes:
+      - application/json
+      - application/x-www-form-urlencoded
+      - multipart/form-data
+      description: 'user_id=1. token — токен источника. PHONE обязателен: строка "79001234567"
+        или массив {VALUE,VALUE_TYPE}. SOURCE_ID должен совпасть с bitrix_code, если
+        оба заданы. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552
+        — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806
+        — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form:
+        fields[PHONE][0][VALUE]=79001234567'
+      parameters:
+      - description: Всегда 1
+        in: path
+        name: user_id
+        required: true
+        type: string
+      - description: Токен источника
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: JSON. Либо form/query с теми же ключами
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/dto.CRMLeadAddRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.BitrixOK'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+      summary: crm.lead.add
+      tags:
+      - crm.lead.add
+  /rest/{user_id}/{token}/crm.lead.add.json:
+    get:
+      consumes:
+      - application/json
+      - application/x-www-form-urlencoded
+      - multipart/form-data
+      description: 'user_id=1. token — токен источника. PHONE обязателен: строка "79001234567"
+        или массив {VALUE,VALUE_TYPE}. SOURCE_ID должен совпасть с bitrix_code, если
+        оба заданы. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552
+        — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806
+        — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form:
+        fields[PHONE][0][VALUE]=79001234567'
+      parameters:
+      - description: Всегда 1
+        in: path
+        name: user_id
+        required: true
+        type: string
+      - description: Токен источника
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: JSON. Либо form/query с теми же ключами
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/dto.CRMLeadAddRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.BitrixOK'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+      summary: crm.lead.add
+      tags:
+      - crm.lead.add
+    post:
+      consumes:
+      - application/json
+      - application/x-www-form-urlencoded
+      - multipart/form-data
+      description: 'user_id=1. token — токен источника. PHONE обязателен: строка "79001234567"
+        или массив {VALUE,VALUE_TYPE}. SOURCE_ID должен совпасть с bitrix_code, если
+        оба заданы. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552
+        — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806
+        — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form:
+        fields[PHONE][0][VALUE]=79001234567'
+      parameters:
+      - description: Всегда 1
+        in: path
+        name: user_id
+        required: true
+        type: string
+      - description: Токен источника
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: JSON. Либо form/query с теми же ключами
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/dto.CRMLeadAddRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.BitrixOK'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.BitrixErrorBody'
+      summary: crm.lead.add
+      tags:
+      - crm.lead.add
+swagger: "2.0"

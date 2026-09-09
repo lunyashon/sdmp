@@ -55,16 +55,20 @@ func TestSyncSkorozvonMapsStoresFieldsAndOptions(t *testing.T) {
 			ID:        50000011780,
 			Name:      "test info",
 			FieldType: "text",
+		}, {
+			ID:        50000011790,
+			Name:      "Регион клиента",
+			FieldType: "multiselect",
 		}}}).
 		WithSkorozvonMaps(repo)
 
 	if err := svc.SyncSkorozvonMaps(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(repo.got) != 3 {
+	if len(repo.got) != 4 {
 		t.Fatalf("rows %+v", repo.got)
 	}
-	if repo.got[0].FieldID != 50000011777 || repo.got[0].OptionID != 0 || repo.got[0].Name != "Источник" {
+	if repo.got[0].FieldID != 50000011777 || repo.got[0].OptionID != 0 || repo.got[0].Name != "Источник" || repo.got[0].BitrixCode != "" {
 		t.Fatalf("field %+v", repo.got[0])
 	}
 	if repo.got[1].OptionID != 50000004560 || repo.got[1].Name != "ВР" {
@@ -72,6 +76,21 @@ func TestSyncSkorozvonMapsStoresFieldsAndOptions(t *testing.T) {
 	}
 	if repo.got[2].FieldID != 50000011780 || repo.got[2].OptionID != 0 {
 		t.Fatalf("text %+v", repo.got[2])
+	}
+	if repo.got[3].Name != "Регион клиента" || repo.got[3].BitrixCode != "UF_CRM_1747216350206" {
+		t.Fatalf("bitrix %+v", repo.got[3])
+	}
+}
+
+func TestBitrixCodeForSkorozvonName(t *testing.T) {
+	if got := bitrixCodeForSkorozvonName("Регион клиента"); got != "UF_CRM_1747216350206" {
+		t.Fatalf("region %q", got)
+	}
+	if got := bitrixCodeForSkorozvonName("Телефоны"); got != "PHONE[0][VALUE]" {
+		t.Fatalf("phone %q", got)
+	}
+	if got := bitrixCodeForSkorozvonName("Название компании"); got != "" {
+		t.Fatalf("company %q", got)
 	}
 }
 

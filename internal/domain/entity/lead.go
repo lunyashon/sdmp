@@ -40,6 +40,7 @@ type LeadEnrichment struct {
 	RegionID       *int
 	RegionSource   int16
 	OperatorID     *int
+	OperatorRaw    string
 	OperatorSource int16
 	ChildSourceID  *int
 	ColdLabel      string
@@ -88,10 +89,11 @@ type SkorozvonAnketaField struct {
 }
 
 type SkorozvonAnketaFieldItem struct {
-	FieldID   int64
-	FieldName string
-	EnumID    int64
-	EnumName  string
+	FieldID    int64
+	FieldName  string
+	BitrixCode string
+	EnumID     int64
+	EnumName   string
 }
 
 type LeadFormResponse struct {

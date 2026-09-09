@@ -36,6 +36,9 @@ const (
 	outboxErrorWait    = time.Second
 	outboxLockTTL      = 2 * time.Minute
 	outboxBx24Stale    = 5 * time.Minute
+
+	// bx24LeadCreateEnabled: false — drain outbox_bx24 without crm.lead.add / bind.
+	bx24LeadCreateEnabled = false
 )
 
 var partnerRetryWaits = []time.Duration{5 * time.Second, 10 * time.Second, 25 * time.Second}
@@ -59,6 +62,7 @@ type WorkerService struct {
 	workers     int
 	idle        time.Duration
 	onErr       time.Duration
+	createBx24  bool
 }
 
 func NewWorkerService(
@@ -91,6 +95,7 @@ func NewWorkerService(
 		workers:     workers,
 		idle:        outboxIdleWait,
 		onErr:       outboxErrorWait,
+		createBx24:  bx24LeadCreateEnabled,
 	}
 }
 
@@ -209,6 +214,13 @@ func (s *WorkerService) ProcessBx24(ctx context.Context) (int, error) {
 }
 
 func (s *WorkerService) handleBx24(ctx context.Context, item entity.OutboxBx24) error {
+	if !s.createBx24 {
+		s.log.Info("outbox_bx24 skipped, drop",
+			"uuid", item.UUID,
+			"uuid_lead", item.LeadUUID,
+		)
+		return s.outboxBx24.Complete(ctx, item.UUID)
+	}
 	if s.bx24 == nil {
 		return nil
 	}
@@ -239,7 +251,11 @@ func (s *WorkerService) handleBx24(ctx context.Context, item entity.OutboxBx24) 
 		"status", added.Status,
 		"result", added.ID,
 		"body", string(added.Raw),
+		"payload", string(payload),
 	)
+	if err != nil || added.ID == 0 {
+		s.saveBx24Dispatch(ctx, lead.ID, added, err)
+	}
 	if err != nil {
 		return err
 	}
@@ -334,6 +350,7 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 
 	enrich := entity.LeadEnrichment{
 		RegionSource:   regionSrc,
+		OperatorRaw:    operatorRaw,
 		OperatorSource: operatorSrc,
 		StatusID:       entity.StatusEnriched,
 	}
@@ -732,6 +749,35 @@ func retryPartner(status int, err error) bool {
 		return true
 	}
 	return status == http.StatusTooManyRequests || status >= 500
+}
+
+func (s *WorkerService) saveBx24Dispatch(ctx context.Context, leadID int64, added crm.LeadAddResult, sendErr error) {
+	if s.leads == nil || leadID <= 0 {
+		return
+	}
+	in := entity.Dispatch{
+		LeadRowID:   leadID,
+		ChannelID:   entity.ChannelBitrix,
+		SentOK:      sendErr == nil && added.ID != 0 && added.Status >= 200 && added.Status < 300,
+		Attempts:    1,
+		ExternalID:  strconv.FormatInt(added.ID, 10),
+		RawResponse: strings.TrimSpace(string(added.Raw)),
+	}
+	if added.ID == 0 {
+		in.ExternalID = ""
+	}
+	if added.Status > 0 {
+		in.HTTPStatus = &added.Status
+	}
+	if in.RawResponse == "" && sendErr != nil {
+		in.RawResponse = sendErr.Error()
+	}
+	if err := s.leads.InsertDispatch(ctx, in); err != nil {
+		s.log.Error("save bx24 dispatch failed",
+			"lead_id", leadID,
+			"error", err,
+		)
+	}
 }
 
 func (s *WorkerService) savePartnerDispatch(ctx context.Context, leadID int64, upkID int, ok bool, status int, attempts int16, raw []byte, sendErr error) {

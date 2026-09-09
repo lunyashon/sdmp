@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -215,7 +216,13 @@ func (r *SourceRepo) Delete(ctx context.Context, id int) error {
 		{`DELETE FROM source WHERE id = ANY($1)`, "delete sources"},
 	}
 	for _, stmt := range stmts {
-		if _, err := tx.Exec(ctx, stmt.q, ids); err != nil {
+		var err error
+		if strings.Contains(stmt.q, "$1") {
+			_, err = tx.Exec(ctx, stmt.q, ids)
+		} else {
+			_, err = tx.Exec(ctx, stmt.q)
+		}
+		if err != nil {
 			return fmt.Errorf("%s: %w", stmt.op, err)
 		}
 	}

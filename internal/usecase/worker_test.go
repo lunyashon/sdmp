@@ -80,12 +80,42 @@ func TestProcessBx24ClaimsUnlocked(t *testing.T) {
 		{UUID: "task-2", LeadUUID: "lead-bbb"},
 	}}
 	svc := NewWorkerService(&stubOutbox{}, nil, nil, nil, nil, nil, nil, 1).WithOutboxBx24(box)
+	svc.createBx24 = false
 	n, err := svc.ProcessBx24(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 2 || box.n != 1 || box.stale != 5*time.Minute {
 		t.Fatalf("n=%d calls=%d stale=%s", n, box.n, box.stale)
+	}
+	if len(box.completed) != 2 || box.completed[0] != "task-1" || box.completed[1] != "task-2" {
+		t.Fatalf("completed %v", box.completed)
+	}
+}
+
+func TestProcessBx24DrainsWithoutBitrix(t *testing.T) {
+	box := &stubOutboxBx24{items: []entity.OutboxBx24{
+		{UUID: "task-1", LeadUUID: "lead-aaa"},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{UUID: "lead-aaa", Phone: "79001234567"}}
+	api := &stubBx24{id: 0, addID: 77, addRaw: []byte(`{"result":77}`)}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxBx24(box).
+		WithBx24(api)
+	svc.createBx24 = false
+
+	n, err := svc.ProcessBx24(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(api.keys) != 0 || len(api.payload) != 0 {
+		t.Fatalf("bitrix called keys=%v payload=%s", api.keys, api.payload)
+	}
+	if len(leads.bitrixBinds) != 0 {
+		t.Fatalf("binds %v", leads.bitrixBinds)
+	}
+	if len(box.completed) != 1 || box.completed[0] != "task-1" {
+		t.Fatalf("completed %v", box.completed)
 	}
 }
 
@@ -101,9 +131,10 @@ type stubBx24 struct {
 	id      int64
 	raw     []byte
 	err     error
-	addID   int64
-	addRaw  []byte
-	addErr  error
+	addID     int64
+	addRaw    []byte
+	addStatus int
+	addErr    error
 	keys    []string
 	payload []byte
 }
@@ -115,7 +146,11 @@ func (s *stubBx24) SearchLead(_ context.Context, key string) (crm.LeadSearchResu
 
 func (s *stubBx24) AddLead(_ context.Context, payload []byte) (crm.LeadAddResult, error) {
 	s.payload = append([]byte(nil), payload...)
-	return crm.LeadAddResult{ID: s.addID, Raw: s.addRaw, Status: 200}, s.addErr
+	status := s.addStatus
+	if status == 0 && s.addErr == nil {
+		status = 200
+	}
+	return crm.LeadAddResult{ID: s.addID, Raw: s.addRaw, Status: status}, s.addErr
 }
 
 func TestProcessBx24BindsWhenFound(t *testing.T) {
@@ -127,6 +162,7 @@ func TestProcessBx24BindsWhenFound(t *testing.T) {
 	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
 		WithOutboxBx24(box).
 		WithBx24(api)
+	svc.createBx24 = true
 
 	n, err := svc.ProcessBx24(context.Background())
 	if err != nil || n != 1 {
@@ -162,6 +198,7 @@ func TestProcessBx24AddsWhenMissing(t *testing.T) {
 	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
 		WithOutboxBx24(box).
 		WithBx24(api)
+	svc.createBx24 = true
 
 	n, err := svc.ProcessBx24(context.Background())
 	if err != nil || n != 1 {
@@ -197,6 +234,7 @@ func TestProcessBx24AddsEvenWithSkorozvonBitrixField(t *testing.T) {
 	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
 		WithOutboxBx24(box).
 		WithBx24(api)
+	svc.createBx24 = true
 
 	n, err := svc.ProcessBx24(context.Background())
 	if err != nil || n != 1 {
@@ -214,11 +252,12 @@ func TestProcessBx24KeepsWhenAddFails(t *testing.T) {
 	box := &stubOutboxBx24{items: []entity.OutboxBx24{
 		{UUID: "task-1", LeadUUID: "lead-aaa"},
 	}}
-	leads := &stubLeads{byUUID: entity.LeadDetail{UUID: "lead-aaa", Phone: "79001234567"}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 42, UUID: "lead-aaa", Phone: "79001234567"}}
 	api := &stubBx24{id: 0, addErr: errors.New("timeout")}
 	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
 		WithOutboxBx24(box).
 		WithBx24(api)
+	svc.createBx24 = true
 
 	n, err := svc.ProcessBx24(context.Background())
 	if err != nil || n != 1 {
@@ -226,6 +265,48 @@ func TestProcessBx24KeepsWhenAddFails(t *testing.T) {
 	}
 	if len(leads.bitrixBinds) != 0 || len(box.completed) != 0 {
 		t.Fatalf("binds %v completed %v", leads.bitrixBinds, box.completed)
+	}
+	if len(leads.dispatches) != 1 || leads.dispatches[0].ChannelID != entity.ChannelBitrix || leads.dispatches[0].SentOK {
+		t.Fatalf("dispatch %+v", leads.dispatches)
+	}
+	if leads.dispatches[0].RawResponse != "timeout" {
+		t.Fatalf("dispatch %+v", leads.dispatches[0])
+	}
+}
+
+func TestProcessBx24WritesDispatchWhenAddRejected(t *testing.T) {
+	box := &stubOutboxBx24{items: []entity.OutboxBx24{
+		{UUID: "task-1", LeadUUID: "lead-aaa"},
+	}}
+	body := `{"result":false,"error":"Лид с таким телефоном и SOURCE_ID создавался за последние 10 часов"}`
+	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 12332286, UUID: "lead-aaa", Phone: "79613523563"}}
+	api := &stubBx24{
+		id:        0,
+		addStatus: 400,
+		addRaw:    []byte(body),
+		addErr:    errors.New("bx24 crm.lead.add: status 400: " + body),
+	}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxBx24(box).
+		WithBx24(api)
+	svc.createBx24 = true
+
+	n, err := svc.ProcessBx24(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(leads.bitrixBinds) != 0 || len(box.completed) != 0 {
+		t.Fatalf("binds %v completed %v", leads.bitrixBinds, box.completed)
+	}
+	if len(leads.dispatches) != 1 {
+		t.Fatalf("dispatch %+v", leads.dispatches)
+	}
+	d := leads.dispatches[0]
+	if d.LeadRowID != 12332286 || d.ChannelID != entity.ChannelBitrix || d.SentOK {
+		t.Fatalf("dispatch %+v", d)
+	}
+	if d.HTTPStatus == nil || *d.HTTPStatus != 400 || d.RawResponse != body {
+		t.Fatalf("dispatch %+v", d)
 	}
 }
 

@@ -102,6 +102,8 @@ type LeadsQuery struct {
 	Tag          string
 	CallResult   *int64
 	ViaUs        *bool
+	IDs          []int64
+	Columns      []string
 	Limit        int
 	Offset       int
 }
@@ -157,6 +159,8 @@ func ParseLeadsQuery(q url.Values) (LeadsQuery, error) {
 		Phone:        strings.TrimSpace(q.Get("phone")),
 		City:         strings.TrimSpace(q.Get("city")),
 		Tag:          strings.TrimSpace(q.Get("tag")),
+		IDs:          queryInt64s(q, "ids"),
+		Columns:      queryStrings(q, "columns"),
 		Limit:        10,
 		Offset:       0,
 	}
@@ -227,6 +231,18 @@ func queryInts(q url.Values, key string) []int {
 	for _, s := range queryStrings(q, key) {
 		n, err := strconv.Atoi(s)
 		if err != nil {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func queryInt64s(q url.Values, key string) []int64 {
+	out := make([]int64, 0)
+	for _, s := range queryStrings(q, key) {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || n <= 0 {
 			continue
 		}
 		out = append(out, n)

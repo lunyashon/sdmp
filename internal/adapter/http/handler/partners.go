@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/lunyashon/sdmp/internal/adapter/http/dto"
 	"github.com/lunyashon/sdmp/internal/adapter/http/response"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
 	"github.com/lunyashon/sdmp/internal/usecase"
@@ -33,17 +34,14 @@ func NewPartnersHandler(svc PartnerAPI, log *slog.Logger) *PartnersHandler {
 	return &PartnersHandler{svc: svc, log: log}
 }
 
-type partnerBody struct {
-	Name          string            `json:"name"`
-	WebhookURL    string            `json:"webhook_url"`
-	IsActive      *bool             `json:"is_active"`
-	ZaryaResults  []string          `json:"zarya_results"`
-	RegionIDs     []int             `json:"region_ids"`
-	StopSourceIDs []int             `json:"stop_source_ids"`
-	Body          map[string]string `json:"body"`
-	ContentType   string            `json:"content_type"`
-}
 
+// List
+// @Summary      Партнёры
+// @Tags         partners
+// @Produce      json
+// @Success      200 {object} response.SuccessEnvelope{data=dto.PartnerList}
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/partners [get]
 func (h *PartnersHandler) List(c *gin.Context) {
 	items, err := h.svc.List(c.Request.Context())
 	if err != nil {
@@ -53,6 +51,16 @@ func (h *PartnersHandler) List(c *gin.Context) {
 	response.List(c, items)
 }
 
+// Create
+// @Summary      Создать партнёра
+// @Tags         partners
+// @Accept       json
+// @Produce      json
+// @Param        body body dto.PartnerRequest true "Партнёр"
+// @Success      201 {object} response.SuccessEnvelope{data=entity.Partner}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/partners [post]
 func (h *PartnersHandler) Create(c *gin.Context) {
 	in, ok := bindPartner(c, true)
 	if !ok {
@@ -66,6 +74,18 @@ func (h *PartnersHandler) Create(c *gin.Context) {
 	response.JSON(c, http.StatusCreated, item)
 }
 
+// Update
+// @Summary      Обновить партнёра
+// @Tags         partners
+// @Accept       json
+// @Produce      json
+// @Param        id   path int true "ID партнёра"
+// @Param        body body dto.PartnerRequest true "Партнёр"
+// @Success      200 {object} response.SuccessEnvelope{data=entity.Partner}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/partners/{id} [put]
 func (h *PartnersHandler) Update(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -84,6 +104,13 @@ func (h *PartnersHandler) Update(c *gin.Context) {
 	response.Success(c, item)
 }
 
+// Refresh
+// @Summary      Проверить webhook всех партнёров
+// @Tags         partners
+// @Produce      json
+// @Success      200 {object} response.SuccessEnvelope{data=dto.PartnerCheckList}
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/partners/refresh [post]
 func (h *PartnersHandler) Refresh(c *gin.Context) {
 	items, err := h.svc.Refresh(c.Request.Context())
 	if err != nil {
@@ -93,6 +120,16 @@ func (h *PartnersHandler) Refresh(c *gin.Context) {
 	response.List(c, items)
 }
 
+// SendTest
+// @Summary      Тестовая отправка партнёру
+// @Tags         partners
+// @Produce      json
+// @Param        id path int true "ID партнёра"
+// @Success      200 {object} response.SuccessEnvelope{data=entity.PartnerCheck}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/partners/{id}/test [post]
 func (h *PartnersHandler) SendTest(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -108,7 +145,7 @@ func (h *PartnersHandler) SendTest(c *gin.Context) {
 }
 
 func bindPartner(c *gin.Context, create bool) (usecase.PartnerInput, bool) {
-	var req partnerBody
+	var req dto.PartnerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(c, http.StatusBadRequest, "invalid json")
 		return usecase.PartnerInput{}, false

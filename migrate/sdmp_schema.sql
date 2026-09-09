@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS "skorozvon_maps" (
 	"field_id" BIGINT NOT NULL,
 	"option_id" BIGINT NOT NULL DEFAULT 0,
 	"name" TEXT NOT NULL,
+	"bitrix_code" VARCHAR,
 	"field_type" VARCHAR,
 	"lead_type" VARCHAR,
 	"updated_at" TIMESTAMP NOT NULL DEFAULT now(),
@@ -150,6 +151,7 @@ COMMENT ON TABLE "skorozvon_maps" IS 'справочник настраивае�
 COMMENT ON COLUMN "skorozvon_maps"."field_id" IS 'id поля в СК. В webhook ключ FIELD_{field_id}';
 COMMENT ON COLUMN "skorozvon_maps"."option_id" IS '0 = само поле (name = название поля). Иначе id опции select/multiselect (name = label опции)';
 COMMENT ON COLUMN "skorozvon_maps"."name" IS 'название поля или подпись опции';
+COMMENT ON COLUMN "skorozvon_maps"."bitrix_code" IS 'Код поля Битрикса для этого названия из Скорозвона. Пусто — поле в Б24 не мапится.';
 COMMENT ON COLUMN "skorozvon_maps"."field_type" IS 'date, multiselect, select, link, text, textarea, number, comment';
 COMMENT ON COLUMN "skorozvon_maps"."lead_type" IS 'lead или organization';
 COMMENT ON COLUMN "skorozvon_maps"."updated_at" IS 'когда worker последний раз обновил строку';
@@ -170,7 +172,7 @@ CREATE TABLE IF NOT EXISTS "dispatch" (
 	PRIMARY KEY("id")
 );
 
-COMMENT ON TABLE "dispatch" IS 'UNIQUE (lead_row_id, channel_id, upk_id). Индексы: (upk_id, sent_at), (sent_at). Пишется только после подтверждения от внешней системы';
+COMMENT ON TABLE "dispatch" IS 'UNIQUE частичные (lead_row_id, channel_id, upk_id) и (lead_row_id, channel_id, skorozvon_project_id). Lookup списка: (lead_row_id, channel_id, sent_at DESC). Пишется только после подтверждения от внешней системы';
 COMMENT ON COLUMN "dispatch"."upk_id" IS 'nullable — только для channel=вебхук-партнёр';
 COMMENT ON COLUMN "dispatch"."skorozvon_project_id" IS 'nullable — только для channel=Скорозвон';
 COMMENT ON COLUMN "dispatch"."external_id" IS 'id организации в СК или ответ вебхука партнёра. Nullable';

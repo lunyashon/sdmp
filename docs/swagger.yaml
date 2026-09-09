@@ -1,0 +1,2170 @@
+basePath: /
+definitions:
+  dto.CreateChildSourceRequest:
+    properties:
+      base_label:
+        type: string
+      bitrix_code:
+        type: string
+      cold_label:
+        type: string
+      name:
+        type: string
+    type: object
+  dto.CreateTokenResponse:
+    properties:
+      source_id:
+        type: integer
+      token:
+        type: string
+    type: object
+  dto.LeadDTO:
+    properties:
+      base_label:
+        type: string
+      call_id:
+        type: string
+      call_result:
+        type: integer
+      call_result_name:
+        type: string
+      call_url:
+        type: string
+      child_source:
+        type: string
+      city:
+        type: string
+      cold_label:
+        type: string
+      date_create:
+        type: string
+      id:
+        type: integer
+      operator:
+        type: string
+      phone:
+        type: string
+      project_num:
+        type: string
+      region:
+        type: string
+      source:
+        type: string
+      source_description:
+        type: string
+      stage:
+        type: string
+      status_id:
+        type: integer
+      tag:
+        type: string
+      upk:
+        type: string
+      uuid:
+        type: string
+      via_us:
+        type: boolean
+      web_id:
+        type: string
+      zarya:
+        type: string
+    type: object
+  dto.LeadDetailDTO:
+    properties:
+      archived_at:
+        type: string
+      base_label:
+        type: string
+      bitrix_lead_id:
+        type: string
+      call_form: {}
+      call_id:
+        type: string
+      call_last_at:
+        type: string
+      call_result:
+        type: integer
+      call_result_name:
+        type: string
+      call_url:
+        type: string
+      child_source:
+        type: string
+      child_source_id:
+        type: integer
+      city:
+        type: string
+      cold_label:
+        type: string
+      created_at:
+        type: string
+      dispatches:
+        items:
+          $ref: '#/definitions/dto.LeadDispatchDTO'
+        type: array
+      events:
+        items:
+          $ref: '#/definitions/dto.LeadEventDTO'
+        type: array
+      id:
+        type: integer
+      legacy_fields: {}
+      operator:
+        type: string
+      operator_id:
+        type: integer
+      operator_source:
+        type: integer
+      phone:
+        type: string
+      phone_history:
+        items:
+          $ref: '#/definitions/dto.LeadPhoneHistoryDTO'
+        type: array
+      phone_valid:
+        type: boolean
+      project_num:
+        type: string
+      region:
+        type: string
+      region_id:
+        type: integer
+      region_source:
+        type: integer
+      s3_key:
+        type: string
+      skorozvon_anketa:
+        $ref: '#/definitions/dto.SkorozvonAnketaDTO'
+      skorozvon_anketa_fields:
+        items:
+          $ref: '#/definitions/dto.SkorozvonAnketaFieldDTO'
+        type: array
+      source:
+        type: string
+      source_description:
+        type: string
+      source_id:
+        type: integer
+      stage:
+        type: string
+      status_id:
+        type: integer
+      tag:
+        type: string
+      updated_at:
+        type: string
+      upk:
+        type: string
+      uuid:
+        type: string
+      via_us:
+        type: boolean
+      web_id:
+        type: string
+      zarya:
+        type: string
+    type: object
+  dto.LeadDetailResponse:
+    properties:
+      lead:
+        $ref: '#/definitions/dto.LeadDetailDTO'
+    type: object
+  dto.LeadDispatchDTO:
+    properties:
+      attempts:
+        type: integer
+      channel:
+        type: string
+      channel_id:
+        type: integer
+      external_id:
+        type: string
+      http_status:
+        type: integer
+      project_id:
+        type: string
+      raw_response:
+        type: string
+      sent_at:
+        type: string
+      sent_ok:
+        type: boolean
+      upk:
+        type: string
+      upk_id:
+        type: integer
+    type: object
+  dto.LeadEnrichmentStatList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.LeadEnrichmentStat'
+        type: array
+    type: object
+  dto.LeadEventDTO:
+    properties:
+      details:
+        type: string
+      occurred_at:
+        type: string
+      source:
+        type: integer
+      type:
+        type: string
+      type_id:
+        type: integer
+    type: object
+  dto.LeadPhoneHistoryDTO:
+    properties:
+      date_create:
+        type: string
+      id:
+        type: integer
+      source:
+        type: string
+      stage:
+        type: string
+      status_id:
+        type: integer
+      uuid:
+        type: string
+    type: object
+  dto.LeadSkorozvonBitrixStatList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.LeadSkorozvonBitrixStat'
+        type: array
+    type: object
+  dto.LeadSourceCountList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.LeadSourceCount'
+        type: array
+    type: object
+  dto.LeadZaryaStatList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.LeadZaryaStat'
+        type: array
+    type: object
+  dto.LeadsResponse:
+    properties:
+      count:
+        type: integer
+      leads:
+        items:
+          $ref: '#/definitions/dto.LeadDTO'
+        type: array
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
+  dto.NamedRefList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.NamedRef'
+        type: array
+    type: object
+  dto.OperatorAliasRequest:
+    properties:
+      alias:
+        example: Билайн
+        type: string
+    type: object
+  dto.OperatorGroupList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.OperatorGroup'
+        type: array
+    type: object
+  dto.PartnerCheckList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.PartnerCheck'
+        type: array
+    type: object
+  dto.PartnerList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.Partner'
+        type: array
+    type: object
+  dto.PartnerRequest:
+    properties:
+      body:
+        additionalProperties:
+          type: string
+        type: object
+      content_type:
+        type: string
+      is_active:
+        type: boolean
+      name:
+        type: string
+      region_ids:
+        items:
+          type: integer
+        type: array
+      stop_source_ids:
+        items:
+          type: integer
+        type: array
+      webhook_url:
+        type: string
+      zarya_results:
+        items:
+          type: string
+        type: array
+    type: object
+  dto.PartnerResendResult:
+    properties:
+      attempts:
+        type: integer
+      http_status:
+        type: integer
+      partner_id:
+        type: integer
+      partner_name:
+        type: string
+      raw_response:
+        type: string
+      sent_ok:
+        type: boolean
+    type: object
+  dto.SkorozvonAnketaAnswerDTO:
+    properties:
+      answer_id:
+        type: integer
+      answer_values:
+        items:
+          type: string
+        type: array
+      question_id:
+        type: integer
+      question_name:
+        type: string
+    type: object
+  dto.SkorozvonAnketaDTO:
+    properties:
+      answers:
+        items:
+          $ref: '#/definitions/dto.SkorozvonAnketaAnswerDTO'
+        type: array
+      call_id:
+        type: string
+      form_id:
+        type: integer
+      form_name:
+        type: string
+      id:
+        type: integer
+      scenario_id:
+        type: integer
+      updated_at:
+        type: string
+      user_id:
+        type: integer
+    type: object
+  dto.SkorozvonAnketaFieldDTO:
+    properties:
+      field_id:
+        type: integer
+      name:
+        type: string
+      values:
+        items:
+          type: string
+        type: array
+    type: object
+  dto.SkorozvonEventRequest:
+    properties:
+      type:
+        example: call_result
+        type: string
+    type: object
+  dto.SkorozvonLinkList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.SkorozvonLink'
+        type: array
+    type: object
+  dto.SkorozvonLinkRequest:
+    properties:
+      child_source_ids:
+        items:
+          type: integer
+        type: array
+      name:
+        type: string
+      project_id:
+        type: integer
+      region_ids:
+        items:
+          type: integer
+        type: array
+      type:
+        type: string
+    type: object
+  dto.SkorozvonProjectList:
+    properties:
+      count:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/entity.SkorozvonProject'
+        type: array
+    type: object
+  dto.SkorozvonProjectRequest:
+    properties:
+      name:
+        type: string
+      project_id:
+        type: integer
+    type: object
+  dto.SourceDTO:
+    properties:
+      base_label:
+        type: string
+      bitrix_code:
+        type: string
+      cold_label:
+        type: string
+      id:
+        type: integer
+      idempotency_active:
+        type: boolean
+      is_active:
+        type: boolean
+      name:
+        type: string
+      parent_id:
+        type: integer
+      token:
+        type: string
+    type: object
+  dto.SourceSplitItems:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/entity.SourceSplit'
+        type: array
+    type: object
+  dto.SourcesResponse:
+    properties:
+      count:
+        type: integer
+      sources:
+        items:
+          $ref: '#/definitions/dto.SourceDTO'
+        type: array
+    type: object
+  dto.UpdateSourceActiveRequest:
+    properties:
+      is_active:
+        type: boolean
+    type: object
+  entity.LeadEnrichmentStat:
+    properties:
+      operator:
+        $ref: '#/definitions/entity.LeadGeoShare'
+      region:
+        $ref: '#/definitions/entity.LeadGeoShare'
+      source_id:
+        type: integer
+      total:
+        type: integer
+    type: object
+  entity.LeadGeoShare:
+    properties:
+      provider:
+        type: integer
+      supplier:
+        type: integer
+      unknown:
+        type: integer
+    type: object
+  entity.LeadSkorozvonBitrixStat:
+    properties:
+      created:
+        type: integer
+      created_sent:
+        type: integer
+      source_id:
+        type: integer
+      updated:
+        type: integer
+      updated_sent:
+        type: integer
+    type: object
+  entity.LeadSourceCount:
+    properties:
+      count:
+        type: integer
+      source_id:
+        type: integer
+    type: object
+  entity.LeadZaryaStat:
+    properties:
+      dup:
+        type: integer
+      source_id:
+        type: integer
+      total:
+        type: integer
+      unique:
+        type: integer
+    type: object
+  entity.NamedRef:
+    properties:
+      id:
+        type: integer
+      name:
+        type: string
+    type: object
+  entity.OperatorGroup:
+    properties:
+      aliases:
+        items:
+          type: string
+        type: array
+      id:
+        type: integer
+      name:
+        type: string
+      unmapped:
+        items:
+          type: string
+        type: array
+    type: object
+  entity.Partner:
+    properties:
+      body:
+        additionalProperties:
+          type: string
+        type: object
+      content_type:
+        type: string
+      id:
+        type: integer
+      is_active:
+        type: boolean
+      last_date_request:
+        type: string
+      last_http_status:
+        type: integer
+      last_request:
+        type: boolean
+      last_response:
+        type: string
+      name:
+        type: string
+      region_ids:
+        items:
+          type: integer
+        type: array
+      stop_source_ids:
+        items:
+          type: integer
+        type: array
+      webhook_url:
+        type: string
+      zarya_results:
+        items:
+          type: string
+        type: array
+    type: object
+  entity.PartnerCheck:
+    properties:
+      checked_at:
+        type: string
+      http_status:
+        type: integer
+      id:
+        type: integer
+      name:
+        type: string
+      ok:
+        type: boolean
+      response:
+        type: string
+    type: object
+  entity.SkorozvonLink:
+    properties:
+      child_source_ids:
+        items:
+          type: integer
+        type: array
+      id:
+        type: integer
+      name:
+        type: string
+      project_id:
+        type: integer
+      region_ids:
+        items:
+          type: integer
+        type: array
+      type:
+        type: string
+    type: object
+  entity.SkorozvonProject:
+    properties:
+      created_at:
+        type: string
+      last_date_request:
+        type: string
+      last_request:
+        type: boolean
+      name:
+        type: string
+      project_id:
+        type: integer
+      uuid:
+        type: string
+    type: object
+  entity.SourceSplit:
+    properties:
+      rules:
+        items:
+          $ref: '#/definitions/entity.SplitRule'
+        type: array
+      source_id:
+        type: integer
+      teg_active:
+        type: boolean
+      teg_expected_value:
+        type: string
+    type: object
+  entity.SplitRule:
+    properties:
+      base_label:
+        type: string
+      child_source_id:
+        type: integer
+      cold_label:
+        type: string
+      id:
+        type: integer
+      operator_id:
+        type: integer
+      test_child_source_id:
+        type: integer
+    type: object
+  response.ErrorData:
+    properties:
+      error:
+        type: string
+    type: object
+  response.ErrorEnvelope:
+    properties:
+      data:
+        $ref: '#/definitions/response.ErrorData'
+      success:
+        example: false
+        type: boolean
+    type: object
+  response.HealthBody:
+    properties:
+      status:
+        type: string
+    type: object
+  response.LeadIDBody:
+    properties:
+      lead_id:
+        type: integer
+    type: object
+  response.SuccessEnvelope:
+    properties:
+      data: {}
+      success:
+        example: true
+        type: boolean
+    type: object
+info:
+  contact: {}
+  description: 'REST и приём трафика SDMP. Успешные ответы: {success:true, data:...}.'
+  title: SDMP API
+  version: "0.1"
+paths:
+  /api/v1/health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/response.HealthBody'
+              type: object
+      summary: Health
+      tags:
+      - health
+  /rest/leads:
+    get:
+      parameters:
+      - description: Дата с, dd.mm.yyyy HH:MM:SS
+        in: query
+        name: date_from
+        required: true
+        type: string
+      - description: Дата по
+        in: query
+        name: date_to
+        required: true
+        type: string
+      - collectionFormat: multi
+        description: ID источников
+        in: query
+        items:
+          type: integer
+        name: sources
+        type: array
+      - collectionFormat: multi
+        description: ID подисточников
+        in: query
+        items:
+          type: integer
+        name: child_sources
+        type: array
+      - collectionFormat: multi
+        description: Метка базы
+        in: query
+        items:
+          type: string
+        name: cold_label
+        type: array
+      - collectionFormat: multi
+        description: ID регионов
+        in: query
+        items:
+          type: integer
+        name: region
+        type: array
+      - collectionFormat: multi
+        description: ID операторов
+        in: query
+        items:
+          type: integer
+        name: operator
+        type: array
+      - collectionFormat: multi
+        description: ID стадий
+        in: query
+        items:
+          type: integer
+        name: status
+        type: array
+      - collectionFormat: multi
+        description: Заря
+        in: query
+        items:
+          type: string
+        name: zarya
+        type: array
+      - description: Телефон
+        in: query
+        name: phone
+        type: string
+      - description: Город
+        in: query
+        name: city
+        type: string
+      - description: Тег
+        in: query
+        name: tag
+        type: string
+      - description: ID результата звонка
+        in: query
+        name: call_result
+        type: integer
+      - description: false=создалась из СК, true=обновилась
+        in: query
+        name: via_us
+        type: boolean
+      - default: 10
+        description: Лимит
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Смещение
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.LeadsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Список лидов
+      tags:
+      - leads
+  /rest/leads/{id}:
+    get:
+      parameters:
+      - description: lead_row.id или uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.LeadDetailResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Карточка лида
+      tags:
+      - leads
+  /rest/leads/{id}/partners/{partnerId}/resend:
+    post:
+      parameters:
+      - description: lead_row.id или uuid
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: ID партнёра
+        in: path
+        name: partnerId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.PartnerResendResult'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Повторная отправка партнёру
+      tags:
+      - leads
+  /rest/leads/{id}/raw:
+    get:
+      parameters:
+      - description: lead_row.id или uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Сырой payload лида (S3)
+      tags:
+      - leads
+  /rest/leads/enrichment-stats:
+    get:
+      parameters:
+      - description: Дата с
+        in: query
+        name: date_from
+        required: true
+        type: string
+      - description: Дата по
+        in: query
+        name: date_to
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.LeadEnrichmentStatList'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Статистика обогащения (регион / оператор)
+      tags:
+      - leads
+  /rest/leads/export.xlsx:
+    get:
+      parameters:
+      - description: Дата с
+        in: query
+        name: date_from
+        required: true
+        type: string
+      - description: Дата по
+        in: query
+        name: date_to
+        required: true
+        type: string
+      - collectionFormat: multi
+        description: ID источников
+        in: query
+        items:
+          type: integer
+        name: sources
+        type: array
+      - collectionFormat: multi
+        description: ID подисточников
+        in: query
+        items:
+          type: integer
+        name: child_sources
+        type: array
+      - collectionFormat: multi
+        description: Метка базы
+        in: query
+        items:
+          type: string
+        name: cold_label
+        type: array
+      - collectionFormat: multi
+        description: ID регионов
+        in: query
+        items:
+          type: integer
+        name: region
+        type: array
+      - collectionFormat: multi
+        description: ID операторов
+        in: query
+        items:
+          type: integer
+        name: operator
+        type: array
+      - collectionFormat: multi
+        description: ID стадий
+        in: query
+        items:
+          type: integer
+        name: status
+        type: array
+      - collectionFormat: multi
+        description: Заря
+        in: query
+        items:
+          type: string
+        name: zarya
+        type: array
+      - description: Телефон
+        in: query
+        name: phone
+        type: string
+      - description: Город
+        in: query
+        name: city
+        type: string
+      - description: Тег
+        in: query
+        name: tag
+        type: string
+      - description: ID результата звонка
+        in: query
+        name: call_result
+        type: integer
+      - description: false=создалась из СК, true=обновилась
+        in: query
+        name: via_us
+        type: boolean
+      - collectionFormat: multi
+        description: Только эти lead_row.id
+        in: query
+        items:
+          type: integer
+        name: ids
+        type: array
+      - collectionFormat: multi
+        description: Колонки файла
+        in: query
+        items:
+          type: string
+        name: columns
+        type: array
+      produces:
+      - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Выгрузка лидов в XLSX
+      tags:
+      - leads
+  /rest/leads/incoming-stats:
+    get:
+      parameters:
+      - description: Дата с
+        in: query
+        name: date_from
+        required: true
+        type: string
+      - description: Дата по
+        in: query
+        name: date_to
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.LeadSourceCountList'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Входящий трафик по источникам
+      tags:
+      - leads
+  /rest/leads/skorozvon-bitrix-stats:
+    get:
+      parameters:
+      - description: Дата с
+        in: query
+        name: date_from
+        required: true
+        type: string
+      - description: Дата по
+        in: query
+        name: date_to
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.LeadSkorozvonBitrixStatList'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Скорозвон → Битрикс
+      tags:
+      - leads
+  /rest/leads/zarya-stats:
+    get:
+      parameters:
+      - description: Дата с
+        in: query
+        name: date_from
+        required: true
+        type: string
+      - description: Дата по
+        in: query
+        name: date_to
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.LeadZaryaStatList'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Статистика Зари
+      tags:
+      - leads
+  /rest/operators:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.OperatorGroupList'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Операторы и верхний маппинг
+      tags:
+      - dicts
+  /rest/operators/{id}/aliases:
+    delete:
+      parameters:
+      - description: ID оператора
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Алиас
+        in: query
+        name: alias
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Удалить алиас оператора
+      tags:
+      - dicts
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID оператора
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Алиас
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.OperatorAliasRequest'
+      responses:
+        "204":
+          description: No Content
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Добавить алиас оператора
+      tags:
+      - dicts
+  /rest/partners:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.PartnerList'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Партнёры
+      tags:
+      - partners
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Партнёр
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.PartnerRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.Partner'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Создать партнёра
+      tags:
+      - partners
+  /rest/partners/{id}:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID партнёра
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Партнёр
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.PartnerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.Partner'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Обновить партнёра
+      tags:
+      - partners
+  /rest/partners/{id}/test:
+    post:
+      parameters:
+      - description: ID партнёра
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.PartnerCheck'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Тестовая отправка партнёру
+      tags:
+      - partners
+  /rest/partners/refresh:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.PartnerCheckList'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Проверить webhook всех партнёров
+      tags:
+      - partners
+  /rest/regions:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.NamedRefList'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Регионы
+      tags:
+      - dicts
+  /rest/skorozvon/events:
+    get:
+      consumes:
+      - application/json
+      description: call_result и form_response. Неизвестные события отвечают 200.
+      parameters:
+      - description: Событие
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.SkorozvonEventRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  items: {}
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Webhook Скорозвона
+      tags:
+      - skorozvon
+    patch:
+      consumes:
+      - application/json
+      description: call_result и form_response. Неизвестные события отвечают 200.
+      parameters:
+      - description: Событие
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.SkorozvonEventRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  items: {}
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Webhook Скорозвона
+      tags:
+      - skorozvon
+    post:
+      consumes:
+      - application/json
+      description: call_result и form_response. Неизвестные события отвечают 200.
+      parameters:
+      - description: Событие
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.SkorozvonEventRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  items: {}
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Webhook Скорозвона
+      tags:
+      - skorozvon
+    put:
+      consumes:
+      - application/json
+      description: call_result и form_response. Неизвестные события отвечают 200.
+      parameters:
+      - description: Событие
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.SkorozvonEventRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  items: {}
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Webhook Скорозвона
+      tags:
+      - skorozvon
+  /rest/skorozvon/links:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SkorozvonLinkList'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Связки Скорозвона
+      tags:
+      - skorozvon
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Связка
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.SkorozvonLinkRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.SkorozvonLink'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Создать связку Скорозвона
+      tags:
+      - skorozvon
+  /rest/skorozvon/links/{id}:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID связки
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Связка
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.SkorozvonLinkRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.SkorozvonLink'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Обновить связку Скорозвона
+      tags:
+      - skorozvon
+  /rest/skorozvon/projects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SkorozvonProjectList'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Проекты Скорозвона
+      tags:
+      - skorozvon
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Проект
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.SkorozvonProjectRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.SkorozvonProject'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Добавить проект Скорозвона
+      tags:
+      - skorozvon
+  /rest/skorozvon/projects/{uuid}/test:
+    post:
+      parameters:
+      - description: UUID проекта
+        in: path
+        name: uuid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/response.LeadIDBody'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Тестовая отправка в проект Скорозвона
+      tags:
+      - skorozvon
+  /rest/skorozvon/projects/refresh:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SkorozvonProjectList'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Обновить проекты из Скорозвона
+      tags:
+      - skorozvon
+  /rest/sources:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SourcesResponse'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Источники
+      tags:
+      - sources
+  /rest/sources/{id}:
+    delete:
+      parameters:
+      - description: ID источника
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Удалить источник
+      tags:
+      - sources
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID источника
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: is_active
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.UpdateSourceActiveRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SourceDTO'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Включить или выключить источник
+      tags:
+      - sources
+  /rest/sources/{id}/children:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID родителя
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Подисточник
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.CreateChildSourceRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SourceDTO'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Создать подисточник
+      tags:
+      - sources
+  /rest/sources/{id}/split:
+    get:
+      parameters:
+      - description: ID источника
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.SourceSplit'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Дробление источника
+      tags:
+      - splits
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID источника
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Правила
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/entity.SourceSplit'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.SourceSplit'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Заменить дробление источника
+      tags:
+      - splits
+  /rest/sources/{id}/token:
+    delete:
+      parameters:
+      - description: ID источника
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Отозвать токен источника
+      tags:
+      - sources
+    post:
+      parameters:
+      - description: ID корневого источника
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.CreateTokenResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Выпустить токен источника
+      tags:
+      - sources
+  /rest/sources/by-token/{token}:
+    get:
+      parameters:
+      - description: Токен
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SourcesResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Источники по токену
+      tags:
+      - sources
+  /rest/splits:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SourceSplitItems'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Все правила дробления
+      tags:
+      - splits
+  /rest/statuses:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.NamedRefList'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Стадии
+      tags:
+      - dicts
+swagger: "2.0"

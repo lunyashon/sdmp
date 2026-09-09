@@ -58,7 +58,7 @@ func partnersRouter(api handler.PartnerAPI) http.Handler {
 		Leads:    handler.NewLeadsHandler(nil, nil),
 		Sources:  handler.NewSourcesHandler(stubSourceAPI{}, nil),
 		Partners: handler.NewPartnersHandler(api, nil),
-	})
+	}, nil)
 }
 
 func TestListPartners(t *testing.T) {

@@ -113,7 +113,7 @@ func Run() error {
 		SkorozvonLinks:    handler.NewSkorozvonLinksHandler(skorozvonLinkSvc, log),
 		SkorozvonEvents:   handler.NewSkorozvonEventsHandler(leadSvc, log),
 		CRMLead:           handler.NewCRMLeadHandler(receiveSvc, log),
-	})
+	}, cfg)
 	srv := server.New(cfg.Port, router, log, cfg)
 
 	errCh := make(chan error, 1)

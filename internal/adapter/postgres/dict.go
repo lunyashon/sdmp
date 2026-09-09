@@ -84,6 +84,55 @@ func (r *DictRepo) ListOperatorGroups(ctx context.Context) ([]entity.OperatorGro
 		}
 		out = append(out, g)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	unmapped, err := r.listUnmappedOperatorRaws(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(unmapped) > 0 {
+		for i := range out {
+			if out[i].Name == "ДРУГИЕ" {
+				out[i].Unmapped = unmapped
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (r *DictRepo) listUnmappedOperatorRaws(ctx context.Context) ([]string, error) {
+	const q = `
+		SELECT DISTINCT trim(lr.operator_raw)
+		FROM lead_row lr
+		JOIN operator o ON o.id = lr.operator_id AND o.name = 'ДРУГИЕ'
+		WHERE lr.operator_raw IS NOT NULL
+		  AND trim(lr.operator_raw) <> ''
+		  AND NOT EXISTS (
+			SELECT 1 FROM operator_alias a
+			WHERE lower(a.alias) = lower(trim(lr.operator_raw))
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM operator g
+			WHERE lower(g.name) = lower(trim(lr.operator_raw))
+		  )
+		ORDER BY 1
+		LIMIT 200
+	`
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list unmapped operator raws: %w", err)
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		out = append(out, raw)
+	}
 	return out, rows.Err()
 }
 

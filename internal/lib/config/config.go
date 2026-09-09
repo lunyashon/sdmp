@@ -50,6 +50,9 @@ type Config struct {
 
 	SodatechBx24URL string
 
+	SwaggerVersion string
+	SwaggerToken   string
+
 	Gomaxprocs int
 }
 
@@ -112,6 +115,8 @@ func getConfig() *Config {
 		SkorozvonAppID:      envString("SKOROZVON_APP_ID", ""),
 		SkorozvonAppKey:     envString("SKOROZVON_APP_KEY", ""),
 		SodatechBx24URL:     envString("SODATECH_BX24_URL", ""),
+		SwaggerVersion:      envString("SWAGGER_VERSION", "v1"),
+		SwaggerToken:        envString("SWAGGER_TOKEN", ""),
 	}
 }
 

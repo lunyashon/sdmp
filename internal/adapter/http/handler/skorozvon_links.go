@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/lunyashon/sdmp/internal/adapter/http/dto"
 	"github.com/lunyashon/sdmp/internal/adapter/http/response"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
 	"github.com/lunyashon/sdmp/internal/usecase"
@@ -31,14 +32,14 @@ func NewSkorozvonLinksHandler(svc SkorozvonLinkAPI, log *slog.Logger) *Skorozvon
 	return &SkorozvonLinksHandler{svc: svc, log: log}
 }
 
-type skorozvonLinkBody struct {
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	ProjectID      int64  `json:"project_id"`
-	ChildSourceIDs []int  `json:"child_source_ids"`
-	RegionIDs      []int  `json:"region_ids"`
-}
 
+// List
+// @Summary      Связки Скорозвона
+// @Tags         skorozvon
+// @Produce      json
+// @Success      200 {object} response.SuccessEnvelope{data=dto.SkorozvonLinkList}
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/skorozvon/links [get]
 func (h *SkorozvonLinksHandler) List(c *gin.Context) {
 	items, err := h.svc.List(c.Request.Context())
 	if err != nil {
@@ -48,6 +49,16 @@ func (h *SkorozvonLinksHandler) List(c *gin.Context) {
 	response.List(c, items)
 }
 
+// Create
+// @Summary      Создать связку Скорозвона
+// @Tags         skorozvon
+// @Accept       json
+// @Produce      json
+// @Param        body body dto.SkorozvonLinkRequest true "Связка"
+// @Success      201 {object} response.SuccessEnvelope{data=entity.SkorozvonLink}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/skorozvon/links [post]
 func (h *SkorozvonLinksHandler) Create(c *gin.Context) {
 	in, ok := bindSkorozvonLink(c)
 	if !ok {
@@ -61,6 +72,18 @@ func (h *SkorozvonLinksHandler) Create(c *gin.Context) {
 	response.JSON(c, http.StatusCreated, item)
 }
 
+// Update
+// @Summary      Обновить связку Скорозвона
+// @Tags         skorozvon
+// @Accept       json
+// @Produce      json
+// @Param        id   path int true "ID связки"
+// @Param        body body dto.SkorozvonLinkRequest true "Связка"
+// @Success      200 {object} response.SuccessEnvelope{data=entity.SkorozvonLink}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/skorozvon/links/{id} [put]
 func (h *SkorozvonLinksHandler) Update(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -80,7 +103,7 @@ func (h *SkorozvonLinksHandler) Update(c *gin.Context) {
 }
 
 func bindSkorozvonLink(c *gin.Context) (usecase.SkorozvonLinkInput, bool) {
-	var req skorozvonLinkBody
+	var req dto.SkorozvonLinkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Error(c, http.StatusBadRequest, "invalid json")
 		return usecase.SkorozvonLinkInput{}, false

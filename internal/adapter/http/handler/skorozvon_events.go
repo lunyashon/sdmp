@@ -89,6 +89,20 @@ type skorozvonFormAnswer struct {
 	AnswerValues []string        `json:"answer_values"`
 }
 
+// Receive
+// @Summary      Webhook Скорозвона
+// @Description  call_result и form_response. Неизвестные события отвечают 200.
+// @Tags         skorozvon
+// @Accept       json
+// @Produce      json
+// @Param        body body dto.SkorozvonEventRequest true "Событие"
+// @Success      200 {object} response.SuccessEnvelope{data=response.Empty}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/skorozvon/events [post]
+// @Router       /rest/skorozvon/events [get]
+// @Router       /rest/skorozvon/events [put]
+// @Router       /rest/skorozvon/events [patch]
 func (h *SkorozvonEventsHandler) Receive(c *gin.Context) {
 	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {

@@ -47,7 +47,7 @@ func skorozvonEventsRouter(svc handler.SkorozvonEventAPI) http.Handler {
 		Leads:           handler.NewLeadsHandler(nil, nil),
 		Sources:         handler.NewSourcesHandler(stubSourceAPI{}, nil),
 		SkorozvonEvents: handler.NewSkorozvonEventsHandler(svc, nil),
-	})
+	}, nil)
 }
 
 func TestReceiveSkorozvonEventPOST(t *testing.T) {

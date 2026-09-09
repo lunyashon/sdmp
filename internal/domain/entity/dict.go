@@ -6,7 +6,8 @@ type NamedRef struct {
 }
 
 type OperatorGroup struct {
-	ID      int      `json:"id"`
-	Name    string   `json:"name"`
-	Aliases []string `json:"aliases"`
+	ID       int      `json:"id"`
+	Name     string   `json:"name"`
+	Aliases  []string `json:"aliases"`
+	Unmapped []string `json:"unmapped,omitempty"`
 }

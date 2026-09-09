@@ -104,3 +104,60 @@ func TestLeadAddPayloadFromAnketaFields(t *testing.T) {
 		t.Fatalf("comments %q", got.Fields["COMMENTS"])
 	}
 }
+
+func TestLeadAddPayloadMapsBitrixCodes(t *testing.T) {
+	raw, err := LeadAddPayload(entity.LeadDetail{
+		UUID:     "2d6d7946-2ed1-455d-89f4-0f697ce3c655",
+		Phone:    "79064830723",
+		Region:   "Самарская область",
+		City:     "Самара",
+		Operator: "",
+		AnketaFields: []entity.SkorozvonAnketaFieldItem{
+			{FieldName: "Сумма долга", BitrixCode: "UF_CRM_1730630573577", EnumName: "300-400 тыс."},
+			{FieldName: "Вид долга", BitrixCode: "UF_CRM_1730630661182", EnumName: "Микрозаймы"},
+			{FieldName: "Вид долга", BitrixCode: "UF_CRM_1730630661182", EnumName: "ЖКХ"},
+			{FieldName: "Имущество", BitrixCode: "UF_CRM_1730630726419", EnumName: "Есть, но готов расстаться"},
+			{FieldName: "Доход", BitrixCode: "UF_CRM_1742819602566", EnumName: "Более 65 тыс."},
+			{FieldName: "Оператор", BitrixCode: "UF_CRM_1676626557", EnumName: "Жарина Анастасия Юрьевна"},
+			{FieldName: "Номер проекта", BitrixCode: "UF_CRM_1699340770806", EnumID: 32323},
+			{FieldName: "GDMP_Z", BitrixCode: "UF_CRM_1747907679528", EnumID: 23423},
+			{FieldName: "ID лида Б24", EnumID: 18013592},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Fields map[string]any `json:"fields"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Fields["UF_CRM_1730630573577"] != "300-400 тыс." {
+		t.Fatalf("debt %v", got.Fields["UF_CRM_1730630573577"])
+	}
+	if got.Fields["UF_CRM_1730630661182"] != "Микрозаймы, ЖКХ" {
+		t.Fatalf("kind %v", got.Fields["UF_CRM_1730630661182"])
+	}
+	if got.Fields["UF_CRM_1730630726419"] != "Есть, но готов расстаться" {
+		t.Fatalf("property %v", got.Fields["UF_CRM_1730630726419"])
+	}
+	if got.Fields["UF_CRM_1742819602566"] != "Более 65 тыс." {
+		t.Fatalf("income %v", got.Fields["UF_CRM_1742819602566"])
+	}
+	if got.Fields["UF_CRM_1676626557"] != "Жарина Анастасия Юрьевна" {
+		t.Fatalf("op %v", got.Fields["UF_CRM_1676626557"])
+	}
+	if got.Fields["UF_CRM_1699340770806"] != "32323" {
+		t.Fatalf("project %v", got.Fields["UF_CRM_1699340770806"])
+	}
+	if got.Fields["UF_CRM_1747907679528"] != "23423" {
+		t.Fatalf("gdmp %v", got.Fields["UF_CRM_1747907679528"])
+	}
+	if _, ok := got.Fields["ID лида Б24"]; ok {
+		t.Fatal("unmapped field leaked")
+	}
+	if got.Fields["UF_CRM_1747216350206"] != "Самарская область" || got.Fields["UF_CRM_1638446549"] != "Самара" {
+		t.Fatalf("geo %v %v", got.Fields["UF_CRM_1747216350206"], got.Fields["UF_CRM_1638446549"])
+	}
+}

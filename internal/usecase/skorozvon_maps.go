@@ -8,10 +8,15 @@ import (
 
 	"github.com/lunyashon/sdmp/internal/domain/entity"
 	"github.com/lunyashon/sdmp/internal/lib/clock"
+	"github.com/lunyashon/sdmp/internal/lib/crm"
 	"github.com/lunyashon/sdmp/internal/port"
 )
 
 var skorozvonMapsHours = []int{12, 19}
+
+func bitrixCodeForSkorozvonName(name string) string {
+	return crm.BitrixCodeForSkorozvonName(name)
+}
 
 func (s *WorkerService) WithSkorozvonMaps(maps port.SkorozvonMapRepository) *WorkerService {
 	s.maps = maps
@@ -66,12 +71,13 @@ func flattenSkorozvonMaps(fields []port.SkorozvonCustomField, now time.Time) []e
 			name = fmt.Sprintf("FIELD_%d", f.ID)
 		}
 		out = append(out, entity.SkorozvonMap{
-			FieldID:   f.ID,
-			OptionID:  0,
-			Name:      name,
-			FieldType: strings.TrimSpace(f.FieldType),
-			LeadType:  strings.TrimSpace(f.LeadType),
-			UpdatedAt: now,
+			FieldID:    f.ID,
+			OptionID:   0,
+			Name:       name,
+			BitrixCode: bitrixCodeForSkorozvonName(name),
+			FieldType:  strings.TrimSpace(f.FieldType),
+			LeadType:   strings.TrimSpace(f.LeadType),
+			UpdatedAt:  now,
 		})
 		for _, opt := range f.Options {
 			if opt.ID == 0 {

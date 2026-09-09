@@ -22,6 +22,7 @@ type LeadListFilter struct {
 	Tag          string
 	CallResult   *int64
 	ViaUs        *bool
+	IDs          []int64
 	Limit        int
 	Offset       int
 }

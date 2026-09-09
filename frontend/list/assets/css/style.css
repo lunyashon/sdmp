@@ -100,7 +100,22 @@
   tbody tr:last-child td { border-bottom: none; }
   tbody tr:hover { background: #fafaf8; }
   tbody tr.clickable { cursor: pointer; }
-  .chk { width: 32px; }
+  .chk { width: 32px; text-align: center; }
+  .chk input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none;
+    width: 16px; height: 16px; margin: 0; vertical-align: middle;
+    border: 1.5px solid var(--border-strong); border-radius: 4px;
+    background: var(--surface); cursor: pointer;
+  }
+  .chk input[type="checkbox"]:hover { border-color: var(--accent); }
+  .chk input[type="checkbox"]:checked {
+    background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3.1 6-6.2'/%3E%3C/svg%3E") center / 12px 12px no-repeat;
+    border-color: var(--accent);
+  }
+  .chk input[type="checkbox"]:indeterminate {
+    background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' d='M3.5 8h9'/%3E%3C/svg%3E") center / 12px 12px no-repeat;
+    border-color: var(--accent);
+  }
   .uuid-link { color: #2f6fa8; text-decoration: none; font-family: "SF Mono", Consolas, monospace; font-size: 12px; }
   .uuid-link:hover { text-decoration: underline; color: #1a4d7a; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 12px; font-weight: 500; }

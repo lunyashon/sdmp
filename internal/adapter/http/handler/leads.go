@@ -17,6 +17,7 @@ import (
 
 type LeadAPI interface {
 	Filter(ctx context.Context, q usecase.LeadFilterQuery) (usecase.LeadFilterResult, error)
+	ExportXLSX(ctx context.Context, q usecase.LeadFilterQuery, columns []string) (usecase.LeadExportFile, error)
 	IncomingStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadSourceCount, error)
 	EnrichmentStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadEnrichmentStat, error)
 	ZaryaStats(ctx context.Context, dateFrom, dateTo string) ([]entity.LeadZaryaStat, error)
@@ -39,6 +40,31 @@ func NewLeadsHandler(svc LeadAPI, log *slog.Logger) *LeadsHandler {
 	return &LeadsHandler{svc: svc, log: log}
 }
 
+// List
+// @Summary      Список лидов
+// @Tags         leads
+// @Produce      json
+// @Param        date_from      query     string   true  "Дата с, dd.mm.yyyy HH:MM:SS"
+// @Param        date_to        query     string   true  "Дата по"
+// @Param        sources        query     []int    false "ID источников" collectionFormat(multi)
+// @Param        child_sources  query     []int    false "ID подисточников" collectionFormat(multi)
+// @Param        cold_label     query     []string false "Метка базы" collectionFormat(multi)
+// @Param        region         query     []int    false "ID регионов" collectionFormat(multi)
+// @Param        operator       query     []int    false "ID операторов" collectionFormat(multi)
+// @Param        status         query     []int    false "ID стадий" collectionFormat(multi)
+// @Param        zarya          query     []string false "Заря" collectionFormat(multi)
+// @Param        phone          query     string   false "Телефон"
+// @Param        city           query     string   false "Город"
+// @Param        tag            query     string   false "Тег"
+// @Param        call_result    query     int      false "ID результата звонка"
+// @Param        via_us         query     bool     false "false=создалась из СК, true=обновилась"
+// @Param        ids            query     []int    false "lead_row.id" collectionFormat(multi)
+// @Param        limit          query     int      false "Лимит" default(10)
+// @Param        offset         query     int      false "Смещение" default(0)
+// @Success      200 {object} response.SuccessEnvelope{data=dto.LeadsResponse}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/leads [get]
 func (h *LeadsHandler) List(c *gin.Context) {
 	q, err := dto.ParseLeadsQuery(c.Request.URL.Query())
 	if err != nil {
@@ -61,6 +87,7 @@ func (h *LeadsHandler) List(c *gin.Context) {
 		Tag:          q.Tag,
 		CallResult:   q.CallResult,
 		ViaUs:        q.ViaUs,
+		IDs:          q.IDs,
 		Limit:        q.Limit,
 		Offset:       q.Offset,
 	})
@@ -83,6 +110,72 @@ func (h *LeadsHandler) List(c *gin.Context) {
 	})
 }
 
+// ExportXLSX
+// @Summary      Выгрузка лидов в XLSX
+// @Tags         leads
+// @Produce      application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+// @Param        date_from      query     string   true  "Дата с"
+// @Param        date_to        query     string   true  "Дата по"
+// @Param        sources        query     []int    false "ID источников" collectionFormat(multi)
+// @Param        child_sources  query     []int    false "ID подисточников" collectionFormat(multi)
+// @Param        cold_label     query     []string false "Метка базы" collectionFormat(multi)
+// @Param        region         query     []int    false "ID регионов" collectionFormat(multi)
+// @Param        operator       query     []int    false "ID операторов" collectionFormat(multi)
+// @Param        status         query     []int    false "ID стадий" collectionFormat(multi)
+// @Param        zarya          query     []string false "Заря" collectionFormat(multi)
+// @Param        phone          query     string   false "Телефон"
+// @Param        city           query     string   false "Город"
+// @Param        tag            query     string   false "Тег"
+// @Param        call_result    query     int      false "ID результата звонка"
+// @Param        via_us         query     bool     false "false=создалась из СК, true=обновилась"
+// @Param        ids            query     []int    false "Только эти lead_row.id" collectionFormat(multi)
+// @Param        columns        query     []string false "Колонки файла" collectionFormat(multi)
+// @Success      200 {file} file
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/leads/export.xlsx [get]
+func (h *LeadsHandler) ExportXLSX(c *gin.Context) {
+	q, err := dto.ParseLeadsQuery(c.Request.URL.Query())
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	file, err := h.svc.ExportXLSX(c.Request.Context(), usecase.LeadFilterQuery{
+		DateFrom:     q.DateFrom,
+		DateTo:       q.DateTo,
+		Sources:      q.Sources,
+		ChildSources: q.ChildSources,
+		ColdLabels:   q.ColdLabels,
+		Regions:      q.Regions,
+		Operators:    q.Operators,
+		Statuses:     q.Statuses,
+		Zarya:        q.Zarya,
+		Phone:        q.Phone,
+		City:         q.City,
+		Tag:          q.Tag,
+		CallResult:   q.CallResult,
+		ViaUs:        q.ViaUs,
+		IDs:          q.IDs,
+	}, q.Columns)
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	name := strings.ReplaceAll(file.Filename, `"`, "")
+	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+	c.Data(http.StatusOK, file.ContentType, file.Body)
+}
+
+// IncomingStats
+// @Summary      Входящий трафик по источникам
+// @Tags         leads
+// @Produce      json
+// @Param        date_from query string true "Дата с"
+// @Param        date_to   query string true "Дата по"
+// @Success      200 {object} response.SuccessEnvelope{data=dto.LeadSourceCountList}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/leads/incoming-stats [get]
 func (h *LeadsHandler) IncomingStats(c *gin.Context) {
 	from, to, ok := statsDates(c)
 	if !ok {
@@ -96,6 +189,16 @@ func (h *LeadsHandler) IncomingStats(c *gin.Context) {
 	response.List(c, items)
 }
 
+// EnrichmentStats
+// @Summary      Статистика обогащения (регион / оператор)
+// @Tags         leads
+// @Produce      json
+// @Param        date_from query string true "Дата с"
+// @Param        date_to   query string true "Дата по"
+// @Success      200 {object} response.SuccessEnvelope{data=dto.LeadEnrichmentStatList}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/leads/enrichment-stats [get]
 func (h *LeadsHandler) EnrichmentStats(c *gin.Context) {
 	from, to, ok := statsDates(c)
 	if !ok {
@@ -109,6 +212,16 @@ func (h *LeadsHandler) EnrichmentStats(c *gin.Context) {
 	response.List(c, items)
 }
 
+// ZaryaStats
+// @Summary      Статистика Зари
+// @Tags         leads
+// @Produce      json
+// @Param        date_from query string true "Дата с"
+// @Param        date_to   query string true "Дата по"
+// @Success      200 {object} response.SuccessEnvelope{data=dto.LeadZaryaStatList}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/leads/zarya-stats [get]
 func (h *LeadsHandler) ZaryaStats(c *gin.Context) {
 	from, to, ok := statsDates(c)
 	if !ok {
@@ -122,6 +235,16 @@ func (h *LeadsHandler) ZaryaStats(c *gin.Context) {
 	response.List(c, items)
 }
 
+// SkorozvonBitrixStats
+// @Summary      Скорозвон → Битрикс
+// @Tags         leads
+// @Produce      json
+// @Param        date_from query string true "Дата с"
+// @Param        date_to   query string true "Дата по"
+// @Success      200 {object} response.SuccessEnvelope{data=dto.LeadSkorozvonBitrixStatList}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/leads/skorozvon-bitrix-stats [get]
 func (h *LeadsHandler) SkorozvonBitrixStats(c *gin.Context) {
 	from, to, ok := statsDates(c)
 	if !ok {
@@ -145,6 +268,16 @@ func statsDates(c *gin.Context) (string, string, bool) {
 	return from, to, true
 }
 
+// Get
+// @Summary      Карточка лида
+// @Tags         leads
+// @Produce      json
+// @Param        id path string true "lead_row.id или uuid"
+// @Success      200 {object} response.SuccessEnvelope{data=dto.LeadDetailResponse}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/leads/{id} [get]
 func (h *LeadsHandler) Get(c *gin.Context) {
 	raw := strings.TrimSpace(c.Param("id"))
 	id, uuid, ok := parseLeadRef(raw)
@@ -169,6 +302,17 @@ func (h *LeadsHandler) Get(c *gin.Context) {
 	response.Success(c, dto.LeadDetailResponse{Lead: dto.NewLeadDetailDTO(lead)})
 }
 
+// ResendPartner
+// @Summary      Повторная отправка партнёру
+// @Tags         leads
+// @Produce      json
+// @Param        id        path int true "lead_row.id или uuid"
+// @Param        partnerId path int true "ID партнёра"
+// @Success      200 {object} response.SuccessEnvelope{data=dto.PartnerResendResult}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/leads/{id}/partners/{partnerId}/resend [post]
 func (h *LeadsHandler) ResendPartner(c *gin.Context) {
 	raw := strings.TrimSpace(c.Param("id"))
 	id, uuid, ok := parseLeadRef(raw)
@@ -189,6 +333,16 @@ func (h *LeadsHandler) ResendPartner(c *gin.Context) {
 	response.Success(c, got)
 }
 
+// Raw
+// @Summary      Сырой payload лида (S3)
+// @Tags         leads
+// @Produce      application/json
+// @Param        id path string true "lead_row.id или uuid"
+// @Success      200 {file} file
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/leads/{id}/raw [get]
 func (h *LeadsHandler) Raw(c *gin.Context) {
 	raw := strings.TrimSpace(c.Param("id"))
 	id, uuid, ok := parseLeadRef(raw)

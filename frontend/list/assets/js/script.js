@@ -38,9 +38,10 @@ const FIELD_CATALOG = [
     { id: 'region', label: 'Регион', group: 'lead_row', type: 'multiselect', pinned: true, options: [] },
     { id: 'operator', label: 'Оператор связи', group: 'lead_row', type: 'multiselect', pinned: true, options: [] },
     { id: 'zarya', label: 'Проверка Зари', group: 'Основные', type: 'multiselect', pinned: true, options: ZARYA_OPTIONS },
+    { id: 'id', label: 'ID', group: 'Основные', type: 'text' },
     { id: 'phone', label: 'Телефон', group: 'Основные', type: 'text', pinned: true },
     { id: 'stage', label: 'Стадия', group: 'lead_row', type: 'multiselect', pinned: true, options: STAGE_OPTIONS },
-    { id: 'viaUs', label: 'Из скорозвона', group: 'lead_row', type: 'select', pinned: true, options: [['false', 'да'], ['true', 'нет']] },
+    { id: 'viaUs', label: 'Из скорозвона строка', group: 'lead_row', type: 'multiselect', pinned: true, options: [['false', 'Создалась'], ['true', 'Обновилось']] },
     { id: 'city', label: 'Город', group: 'lead_row', type: 'text' },
     { id: 'teg', label: 'Тег (вход)', group: 'lead_row', type: 'text' },
     { id: 'callResult', label: 'Результат звонка', group: 'lead_row', type: 'text' },
@@ -50,6 +51,7 @@ let activeFields = DEFAULT_ACTIVE.slice();
 const multiState = {};
 
 const COLUMN_CATALOG = [
+    { id: 'id', label: 'ID', get: r => r.id != null ? esc(r.id) : '—' },
     { id: 'date', label: 'Дата создания', get: r => r.date_create || '—' },
     { id: 'source', label: 'Источник', get: r => esc(r.source || '—') },
     { id: 'childSource', label: 'Подисточник', get: r => esc(r.child_source || '—') },
@@ -60,7 +62,7 @@ const COLUMN_CATALOG = [
     { id: 'city', label: 'Город', get: r => esc(r.city || '—') },
     { id: 'operator', label: 'Оператор', get: r => esc(r.operator || '—') },
     { id: 'stage', label: 'Стадия', get: r => `<span class="stage"><span class="dot dot-${r.status_id || 0}"></span>${esc(r.stage || '—')}</span>` },
-    { id: 'viaUs', label: 'Из скорозвона', get: r => r.via_us === false ? 'да' : 'нет' },
+    { id: 'viaUs', label: 'Из скорозвона строка', get: r => r.via_us === false ? 'Создалась' : 'Обновилось' },
     { id: 'zarya', label: 'Проверка Зари', get: r => r.zarya ? `<span class="badge ${zaryaBadgeClass(r.zarya)}">${esc(r.zarya)}</span>` : '—' },
     { id: 'callResult', label: 'Результат звонка', get: r => esc(r.call_result_name || (r.call_result != null ? String(r.call_result) : '') || '—') },
     { id: 'upk', label: 'ЮПК', get: r => esc(r.upk || '—') },
@@ -69,13 +71,13 @@ const COLUMN_CATALOG = [
     { id: 'webId', label: 'Web ID', get: r => esc(r.web_id || '—') },
     { id: 'projectNum', label: '№ проекта', get: r => esc(r.project_num || '—') },
 ];
-const DEFAULT_COLUMNS = ['date', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'stage', 'viaUs', 'zarya', 'upk', 'phone'];
+const DEFAULT_COLUMNS = ['id', 'date', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'stage', 'viaUs', 'zarya', 'upk', 'phone'];
 const COL_PREFS_KEY = 'sdmp.list.colprefs';
 const CARD_PREFS_KEY = 'sdmp.list.cardfields';
 const MIN_COL_WIDTH = 64;
 const DEFAULT_COL_WIDTHS = {
-    chk: 36, uuid: 280, date: 150, source: 140, childSource: 160, baza: 140, kakaya: 140,
-    sourceDesc: 180, region: 200, city: 140, operator: 120, stage: 120, viaUs: 130, zarya: 140,
+    chk: 36, uuid: 280, id: 90, date: 150, source: 140, childSource: 160, baza: 140, kakaya: 140,
+    sourceDesc: 180, region: 200, city: 140, operator: 120, stage: 120, viaUs: 170, zarya: 140,
     callResult: 130, upk: 110, phone: 130, teg: 120, webId: 120, projectNum: 110,
 };
 let activeColumns = DEFAULT_COLUMNS.slice();
@@ -98,7 +100,7 @@ const EVENT_SOURCE = { 1: 'Worker', 2: 'Скорозвон', 3: 'API', 4: 'вн�
 
 const CARD_FIELD_CATALOG = [
     { id: 'stage', label: 'Стадия', get: r => esc(r.stage || '—') },
-    { id: 'viaUs', label: 'Из скорозвона', get: r => r.via_us === false ? 'да' : 'нет' },
+    { id: 'viaUs', label: 'Из скорозвона строка', get: r => r.via_us === false ? 'Создалась' : 'Обновилось' },
     { id: 'source', label: 'Источник', get: r => esc(r.source || '—') },
     { id: 'childSource', label: 'Подисточник', get: r => esc(r.child_source || '—') },
     { id: 'baza', label: 'Холодная база', get: r => esc(r.cold_label || '—') },
@@ -121,6 +123,7 @@ const CARD_FIELD_CATALOG = [
     { id: 'zarya', label: 'Проверка по Заре', get: r => r.zarya ? `<span class="badge ${zaryaBadgeClass(r.zarya)}">${esc(r.zarya)}</span>` : '—' },
     { id: 'callResult', label: 'Результат звонка', get: r => esc(r.call_result_name || (r.call_result != null ? String(r.call_result) : '') || '—') },
     { id: 'upk', label: 'ЮПК', get: r => esc(r.upk || '—') },
+    { id: 'id', label: 'ID', get: r => r.id != null ? esc(r.id) : '—' },
     { id: 'webId', label: 'Web ID', get: r => esc(r.web_id || '—') },
     { id: 'projectNum', label: '№ проекта', get: r => esc(r.project_num || '—') },
     { id: 'uuid', label: 'UUID', get: r => esc(r.uuid || '—') },
@@ -173,6 +176,10 @@ function toApiDate(value, end) {
     if (!value) return '';
     const [y, m, d] = value.split('-');
     return `${d}.${m}.${y} ${end ? '23:59:59' : '00:00:00'}`;
+}
+
+function parseIDs(raw) {
+    return String(raw || '').split(/[^\d]+/).filter(Boolean);
 }
 
 function fieldValueId(fieldId) { return 'f-' + fieldId; }
@@ -400,7 +407,8 @@ function buildQuery() {
     appendMulti(params, 'region', getFieldValue('region'));
     appendMulti(params, 'operator', getFieldValue('operator'));
     appendMulti(params, 'zarya', getFieldValue('zarya'));
-    const phone = getFieldValue('phone');
+    parseIDs(getFieldValue('id')).forEach(id => params.append('ids', id));
+    const phone = String(getFieldValue('phone') || '').replace(/\D/g, '');
     if (phone) params.set('phone', phone);
     appendMulti(params, 'status', getFieldValue('stage'));
     const city = getFieldValue('city');
@@ -409,8 +417,9 @@ function buildQuery() {
     if (teg) params.set('tag', teg);
     const callResult = getFieldValue('callResult');
     if (callResult) params.set('call_result', callResult);
-    const viaUs = getFieldValue('viaUs');
-    if (viaUs === 'true' || viaUs === 'false') params.set('via_us', viaUs);
+    const viaUsRaw = getFieldValue('viaUs');
+    const viaUs = (Array.isArray(viaUsRaw) ? viaUsRaw : [viaUsRaw]).filter(v => v === 'true' || v === 'false');
+    if (viaUs.length === 1) params.set('via_us', viaUs[0]);
     params.set('limit', String(pageSize));
     params.set('offset', String((page - 1) * pageSize));
     return params;
@@ -604,6 +613,9 @@ function loadColumnPrefs() {
                     const after = activeColumns.indexOf('stage');
                     if (after >= 0) activeColumns.splice(after + 1, 0, 'viaUs');
                     else activeColumns.push('viaUs');
+                }
+                if (!activeColumns.includes('id')) {
+                    activeColumns.unshift('id');
                 }
             }
         }
@@ -911,7 +923,8 @@ function render() {
         const c = COLUMN_CATALOG.find(x => x.id === id);
         return c ? thHtml(c.id, c.label, true) : '';
     }).join('');
-    headRow.innerHTML = `<th class="chk"><input type="checkbox" id="chk-all" onchange="toggleAll(this)"></th>${thHtml('uuid', 'UUID', false)}${headCells}`;
+    const allOn = pageRows.length > 0 && pageRows.every(r => selected.has(r.id));
+    headRow.innerHTML = `<th class="chk"><input type="checkbox" id="chk-all" ${allOn ? 'checked' : ''} onchange="toggleAll(this)"></th>${thHtml('uuid', 'UUID', false)}${headCells}`;
     applyColumnWidths();
 
     tbody.innerHTML = '';
@@ -937,12 +950,26 @@ function render() {
     pagesToShow.forEach(p => btnsWrap.appendChild(mkBtn(String(p), false, () => { page = p; fetchLeads(); }, p === page)));
     btnsWrap.appendChild(mkBtn('\u203a', page >= totalPages, () => { page++; fetchLeads(); }));
     updateSelectedInfo();
+    syncChkAll();
 }
 
-function toggleRow(id, el) { if (el.checked) selected.add(id); else selected.delete(id); updateSelectedInfo(); }
+function toggleRow(id, el) {
+    if (el.checked) selected.add(id);
+    else selected.delete(id);
+    updateSelectedInfo();
+    syncChkAll();
+}
 function toggleAll(el) {
     pageRows.forEach(r => { if (el.checked) selected.add(r.id); else selected.delete(r.id); });
     render();
+}
+function syncChkAll() {
+    const el = document.getElementById('chk-all');
+    if (!el) return;
+    const n = pageRows.length;
+    const c = pageRows.filter(r => selected.has(r.id)).length;
+    el.checked = n > 0 && c === n;
+    el.indeterminate = c > 0 && c < n;
 }
 function updateSelectedInfo() {
     const info = document.getElementById('selected-info');
@@ -953,7 +980,55 @@ function updateSelectedInfo() {
 function exportData(mode) {
     const count = mode === 'selected' ? selected.size : total;
     if (count === 0) { showToast('Нечего экспортировать — список пуст.', true); return; }
-    showToast('Экспорт через API ещё не сделан. Сейчас можно смотреть таблицу и карточку строки.');
+    if (!activeColumns.length) { showToast('Выберите хотя бы одну колонку.', true); return; }
+    const cols = ['uuid', ...activeColumns.filter(id => id !== 'uuid')];
+    const params = new URLSearchParams();
+    const dates = getFieldValue('dateRange') || {};
+    params.set('date_from', toApiDate(dates.from || defaultDateFrom(), false));
+    params.set('date_to', toApiDate(dates.to || defaultDateTo(), true));
+    cols.forEach(id => params.append('columns', id));
+    if (mode === 'selected') {
+        [...selected].forEach(id => params.append('ids', String(id)));
+    } else {
+        const q = buildQuery();
+        q.delete('limit');
+        q.delete('offset');
+        for (const [k, v] of q.entries()) {
+            if (k === 'date_from' || k === 'date_to') continue;
+            params.append(k, v);
+        }
+    }
+    downloadExport(params, count);
+}
+
+async function downloadExport(params, count) {
+    try {
+        showToast('Готовим файл…');
+        const res = await fetch(API + '/rest/leads/export.xlsx?' + params.toString());
+        if (!res.ok) {
+            let msg = res.statusText;
+            try {
+                const body = await res.json();
+                msg = apiError(body, msg);
+            } catch (e) { /* not json */ }
+            throw new Error(msg);
+        }
+        const blob = await res.blob();
+        const dispo = res.headers.get('Content-Disposition') || '';
+        const m = /filename="([^"]+)"/.exec(dispo);
+        const name = m ? m[1] : 'leads.xlsx';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        showToast('Скачано ' + count.toLocaleString('ru-RU') + ' строк.');
+    } catch (err) {
+        showToast('Не удалось экспортировать: ' + err.message, true);
+    }
 }
 function showToast(msg, isError) {
     const t = document.getElementById('export-toast');

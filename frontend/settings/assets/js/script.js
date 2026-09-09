@@ -68,6 +68,7 @@ async function loadOperators() {
     id: o.id,
     group: o.name,
     raw: o.aliases || [],
+    unmapped: o.unmapped || [],
   }));
   DATA.operatorDict.sort((a, b) => (a.group === 'ДРУГИЕ') - (b.group === 'ДРУГИЕ'));
 }
@@ -577,9 +578,7 @@ const PANEL_RENDERERS = {
       <tr${isFallback ? ' style="background:#fdf8ee;"' : ''}>
         <td><input class="cell-input" value="${r.group}" disabled title="Внутренняя группа из справочника"></td>
         <td>
-          ${isFallback
-            ? '<span style="color:var(--text-muted); font-size:12px;">\u2014 сюда автоматически попадает любое значение оператора, не найденное ни в одной другой группе.</span>'
-            : `<div class="tag-list">
+          ${isFallback ? unmappedOperatorHTML(r) : `<div class="tag-list">
                 ${r.raw.map((v,i) => `<span class="tag">${escAttr(v)}<span class="tag-x" onclick="removeOperatorAlias(${r.id}, ${i})">&times;</span></span>`).join('')}
                 <input class="tag-add-input" placeholder="+ добавить" onkeydown="if(event.key==='Enter'){addOperatorAlias(${r.id}, this.value).catch(e=>showError(e.message||e)); this.value='';}">
               </div>`}
@@ -596,7 +595,7 @@ const PANEL_RENDERERS = {
         </table>
       `,
       addFn:null,
-      note:'Слева — внутренние группы из БД. Справа — верхний маппинг: сырые названия поставщика и определителя. Не найденное значение уходит в «ДРУГИЕ».'
+      note:'Слева — внутренние группы из БД. Справа — верхний маппинг: сырые названия поставщика и определителя. Не найденное значение уходит в «ДРУГИЕ»; такие сырые строки показываются там, чтобы добавить их в нужную группу.'
     };
   },
 
@@ -1989,6 +1988,31 @@ function removeTag(entity, id, idx) {
 }
 function escAttr(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function unmappedOperatorHTML(r) {
+  const values = r.unmapped || [];
+  const opts = DATA.operatorDict
+    .filter(g => g.group !== 'ДРУГИЕ')
+    .map(g => `<option value="${g.id}">${escAttr(g.group)}</option>`)
+    .join('');
+  if (!values.length) {
+    return '<span style="color:var(--text-muted); font-size:12px;">\u2014 несмапленных сырых значений пока нет. Сюда автоматически попадает любое значение оператора, не найденное ни в одной другой группе.</span>';
+  }
+  return `<div class="tag-list">
+      ${values.map(v => `<span class="tag tag-unmapped" data-alias="${escAttr(v)}" title="Сырое значение, которое ушло в ДРУГИЕ">${escAttr(v)}<select class="tag-map-select" onchange="mapUnmappedOperator(this)"><option value="">в группу\u2026</option>${opts}</select></span>`).join('')}
+    </div>
+    <div class="unmapped-hint">Эти значения пришли от поставщика или определителя и не совпали ни с одной группой. Выберите группу — добавим в верхний маппинг. Уже принятые строки не пересчитываются.</div>`;
+}
+async function mapUnmappedOperator(sel) {
+  const id = Number(sel && sel.value);
+  const alias = sel && sel.closest && sel.closest('.tag') && sel.closest('.tag').dataset.alias;
+  if (!id || !alias) return;
+  try {
+    await addOperatorAlias(id, alias);
+  } catch (e) {
+    sel.value = '';
+    showError(e.message || e);
+  }
 }
 async function addOperatorAlias(id, value) {
   value = String(value || '').trim();

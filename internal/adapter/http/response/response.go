@@ -19,7 +19,19 @@ type ErrorData struct {
 	Error string `json:"error"`
 }
 
+// ErrorEnvelope — {success:false, data:{error}} для swagger.
+type ErrorEnvelope struct {
+	Success bool      `json:"success" example:"false"`
+	Data    ErrorData `json:"data"`
+}
+
 type Empty []any
+
+// SuccessEnvelope — оболочка успешного ответа для swagger. Поле data уточняется через {data=...}.
+type SuccessEnvelope struct {
+	Success bool `json:"success" example:"true"`
+	Data    any  `json:"data"`
+}
 
 type HealthBody struct {
 	Status string `json:"status"`
@@ -54,6 +66,12 @@ func OK(c *gin.Context) {
 	Success(c, make(Empty, 0))
 }
 
+// Health
+// @Summary      Health
+// @Tags         health
+// @Produce      json
+// @Success      200 {object} SuccessEnvelope{data=HealthBody}
+// @Router       /api/v1/health [get]
 func Health(c *gin.Context) {
 	Success(c, HealthBody{Status: "ok"})
 }

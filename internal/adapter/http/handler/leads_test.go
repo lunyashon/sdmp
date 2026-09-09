@@ -30,17 +30,35 @@ func (s *stubReceiver) Receive(_ context.Context, in usecase.ReceiveLeadInput) (
 }
 
 type stubLeadFilter struct {
-	q      usecase.LeadFilterQuery
-	res    usecase.LeadFilterResult
-	detail entity.LeadDetail
-	raw    usecase.LeadRaw
-	err    error
-	getErr error
+	q       usecase.LeadFilterQuery
+	columns []string
+	res     usecase.LeadFilterResult
+	export  usecase.LeadExportFile
+	detail  entity.LeadDetail
+	raw     usecase.LeadRaw
+	err     error
+	getErr  error
 }
 
 func (s *stubLeadFilter) Filter(_ context.Context, q usecase.LeadFilterQuery) (usecase.LeadFilterResult, error) {
 	s.q = q
 	return s.res, s.err
+}
+
+func (s *stubLeadFilter) ExportXLSX(_ context.Context, q usecase.LeadFilterQuery, columns []string) (usecase.LeadExportFile, error) {
+	s.q = q
+	s.columns = columns
+	if s.err != nil {
+		return usecase.LeadExportFile{}, s.err
+	}
+	if s.export.Body != nil {
+		return s.export, nil
+	}
+	return usecase.LeadExportFile{
+		Filename:    "leads_test.xlsx",
+		ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		Body:        []byte("PK"),
+	}, nil
 }
 
 func (s *stubLeadFilter) IncomingStats(context.Context, string, string) ([]entity.LeadSourceCount, error) {
@@ -130,7 +148,7 @@ func leadsRouter(svc *stubLeadFilter) http.Handler {
 		Leads:   handler.NewLeadsHandler(svc, nil),
 		Sources: handler.NewSourcesHandler(nil, nil),
 		CRMLead: handler.NewCRMLeadHandler(&stubReceiver{id: 1}, nil),
-	})
+	}, nil)
 }
 
 func TestListLeads(t *testing.T) {
@@ -153,7 +171,7 @@ func TestListLeads(t *testing.T) {
 		}},
 	}}
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/rest/leads?date_from=01.08.2026+00:00:00&date_to=30.08.2026+23:59:59&sources=1&sources=12&child_sources=20&cold_label=ВР&region=1&region=5&operator=2&operator=3&zarya=Чистый&zarya=Дубль&phone=79009876539&via_us=false&status=2&status=4", nil)
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads?date_from=01.08.2026+00:00:00&date_to=30.08.2026+23:59:59&sources=1&sources=12&child_sources=20&cold_label=ВР&region=1&region=5&operator=2&operator=3&zarya=Чистый&zarya=Дубль&phone=79009876539&via_us=false&status=2&status=4&ids=42&ids=43", nil)
 	leadsRouter(svc).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
@@ -179,6 +197,35 @@ func TestListLeads(t *testing.T) {
 	}
 	if len(svc.q.Statuses) != 2 || svc.q.Statuses[0] != 2 || svc.q.Statuses[1] != 4 {
 		t.Fatalf("query status %+v", svc.q.Statuses)
+	}
+	if len(svc.q.IDs) != 2 || svc.q.IDs[0] != 42 || svc.q.IDs[1] != 43 {
+		t.Fatalf("query ids %+v", svc.q.IDs)
+	}
+}
+
+func TestExportLeadsXLSX(t *testing.T) {
+	svc := &stubLeadFilter{export: usecase.LeadExportFile{
+		Filename:    "leads_2026-09-09.xlsx",
+		ContentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		Body:        []byte("PK\x03\x04"),
+	}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/export.xlsx?date_from=01.08.2026+00:00:00&date_to=30.08.2026+23:59:59&ids=42&ids=43&columns=uuid&columns=phone", nil)
+	leadsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if w.Header().Get("Content-Type") != svc.export.ContentType {
+		t.Fatalf("type %s", w.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(w.Header().Get("Content-Disposition"), "leads_2026-09-09.xlsx") {
+		t.Fatalf("disp %s", w.Header().Get("Content-Disposition"))
+	}
+	if w.Body.String() != "PK\x03\x04" {
+		t.Fatalf("body %q", w.Body.String())
+	}
+	if len(svc.q.IDs) != 2 || svc.q.IDs[0] != 42 || len(svc.columns) != 2 || svc.columns[0] != "uuid" {
+		t.Fatalf("query %+v cols %v", svc.q, svc.columns)
 	}
 }
 

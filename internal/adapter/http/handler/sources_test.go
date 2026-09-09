@@ -62,7 +62,7 @@ func sourcesRouter(api stubSourceAPI) http.Handler {
 		Leads:   handler.NewLeadsHandler(nil, nil),
 		Sources: handler.NewSourcesHandler(api, nil),
 		CRMLead: handler.NewCRMLeadHandler(&stubReceiver{id: 1}, nil),
-	})
+	}, nil)
 }
 
 func TestCreateSourceToken(t *testing.T) {

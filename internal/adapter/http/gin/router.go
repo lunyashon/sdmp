@@ -1,10 +1,17 @@
 package gin
 
 import (
-	gongin "github.com/gin-gonic/gin"
+	"net/http"
+	"strings"
 
+	gongin "github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
+	_ "github.com/lunyashon/sdmp/docs"
 	"github.com/lunyashon/sdmp/internal/adapter/http/handler"
 	"github.com/lunyashon/sdmp/internal/adapter/http/response"
+	"github.com/lunyashon/sdmp/internal/lib/config"
 )
 
 type Handlers struct {
@@ -19,16 +26,18 @@ type Handlers struct {
 	CRMLead           *handler.CRMLeadHandler
 }
 
-func NewRouter(h Handlers) *gongin.Engine {
+func NewRouter(h Handlers, config *config.Config) *gongin.Engine {
 	router := gongin.New()
 	router.Use(gongin.Logger())
 	router.Use(gongin.Recovery())
 
 	router.GET("/api/v1/health", response.Health)
+	mountSwagger(router, config)
 
 	rest := router.Group("/rest")
 	{
 		rest.GET("/leads", h.Leads.List)
+		rest.GET("/leads/export.xlsx", h.Leads.ExportXLSX)
 		rest.GET("/leads/incoming-stats", h.Leads.IncomingStats)
 		rest.GET("/leads/enrichment-stats", h.Leads.EnrichmentStats)
 		rest.GET("/leads/zarya-stats", h.Leads.ZaryaStats)
@@ -88,4 +97,36 @@ func NewRouter(h Handlers) *gongin.Engine {
 	}
 
 	return router
+}
+
+func mountSwagger(router *gongin.Engine, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	version := strings.Trim(strings.TrimSpace(cfg.SwaggerVersion), `"'`)
+	token := strings.Trim(strings.TrimSpace(cfg.SwaggerToken), `"'`)
+	if version == "" || token == "" {
+		return
+	}
+	mountSwaggerUI(router, "/swagger/crm/"+version+"/"+token, "crm")
+	mountSwaggerUI(router, "/swagger/"+version+"/"+token, "swagger")
+}
+
+func mountSwaggerUI(router *gongin.Engine, prefix, instance string) {
+	opts := []func(*ginSwagger.Config){ginSwagger.URL(prefix + "/doc.json")}
+	if instance != "" && instance != "swagger" {
+		opts = append(opts, ginSwagger.InstanceName(instance))
+	}
+	ui := ginSwagger.WrapHandler(swaggerFiles.Handler, opts...)
+	redirect := func(c *gongin.Context) {
+		c.Redirect(http.StatusFound, prefix+"/index.html")
+	}
+	router.GET(prefix, redirect)
+	router.GET(prefix+"/*any", func(c *gongin.Context) {
+		if strings.Trim(c.Param("any"), "/") == "" {
+			redirect(c)
+			return
+		}
+		ui(c)
+	})
 }

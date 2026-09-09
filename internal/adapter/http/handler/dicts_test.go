@@ -50,7 +50,7 @@ func dictsRouter(api handler.DictAPI) http.Handler {
 		Leads:   handler.NewLeadsHandler(nil, nil),
 		Sources: handler.NewSourcesHandler(stubSourceAPI{}, nil),
 		Dicts:   handler.NewDictsHandler(api, nil),
-	})
+	}, nil)
 }
 
 func TestOperatorsReturnsGroupsWithAliases(t *testing.T) {

@@ -9,11 +9,11 @@ import (
 	"path"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
 	"github.com/lunyashon/sdmp/internal/lib/clock"
+	"github.com/lunyashon/sdmp/internal/lib/phone"
 	"github.com/lunyashon/sdmp/internal/port"
 )
 
@@ -38,6 +38,7 @@ type LeadFilterQuery struct {
 	Tag          string
 	CallResult   *int64
 	ViaUs        *bool
+	IDs          []int64
 	Limit        int
 	Offset       int
 }
@@ -142,6 +143,7 @@ func (s *LeadService) Filter(ctx context.Context, q LeadFilterQuery) (LeadFilter
 		Tag:          strings.TrimSpace(q.Tag),
 		CallResult:   q.CallResult,
 		ViaUs:        q.ViaUs,
+		IDs:          q.IDs,
 		Limit:        limit,
 		Offset:       offset,
 	}
@@ -551,19 +553,5 @@ func parseIncomingBound(raw string, endOfDay bool) (time.Time, error) {
 }
 
 func normalizeListPhone(raw string) string {
-	var b strings.Builder
-	for _, r := range raw {
-		if unicode.IsDigit(r) {
-			b.WriteRune(r)
-		}
-	}
-	digits := b.String()
-	switch {
-	case len(digits) == 11 && digits[0] == '8':
-		return "7" + digits[1:]
-	case len(digits) == 10:
-		return "7" + digits
-	default:
-		return digits
-	}
+	return phone.ForceCountry7(phone.Digits(raw))
 }

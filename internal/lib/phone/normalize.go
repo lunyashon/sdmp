@@ -5,21 +5,30 @@ import (
 	"unicode"
 )
 
-func Normalize(raw string) (string, bool) {
+func Digits(raw string) string {
 	var b strings.Builder
 	for _, r := range raw {
 		if unicode.IsDigit(r) {
 			b.WriteRune(r)
 		}
 	}
-	digits := b.String()
+	return b.String()
+}
+
+func ForceCountry7(digits string) string {
 	switch {
-	case len(digits) == 11 && digits[0] == '8':
-		digits = "7" + digits[1:]
 	case len(digits) == 10:
-		digits = "7" + digits
+		return "7" + digits
+	case len(digits) == 11:
+		return "7" + digits[1:]
+	default:
+		return digits
 	}
-	if len(digits) != 11 || digits[0] != '7' {
+}
+
+func Normalize(raw string) (string, bool) {
+	digits := ForceCountry7(Digits(raw))
+	if len(digits) != 11 {
 		return "", false
 	}
 	return digits, true

@@ -22,7 +22,7 @@ func crmRouter(recv *stubReceiver) http.Handler {
 		Leads:   handler.NewLeadsHandler(nil, nil),
 		Sources: handler.NewSourcesHandler(nil, nil),
 		CRMLead: handler.NewCRMLeadHandler(recv, nil),
-	})
+	}, nil)
 }
 
 func TestCRMLeadAddJSON(t *testing.T) {
