@@ -1,6 +1,10 @@
 package dto
 
-import "github.com/lunyashon/sdmp/internal/domain/entity"
+import (
+	"encoding/json"
+
+	"github.com/lunyashon/sdmp/internal/domain/entity"
+)
 
 // OperatorAliasRequest тело POST /rest/operators/{id}/aliases.
 type OperatorAliasRequest struct {
@@ -19,12 +23,6 @@ type PartnerRequest struct {
 	ContentType   string            `json:"content_type"`
 }
 
-// SkorozvonProjectRequest тело POST /rest/skorozvon/projects.
-type SkorozvonProjectRequest struct {
-	Name      string `json:"name"`
-	ProjectID int64  `json:"project_id"`
-}
-
 // SkorozvonLinkRequest тело создания и обновления связки Скорозвона.
 type SkorozvonLinkRequest struct {
 	Name           string `json:"name"`
@@ -32,6 +30,21 @@ type SkorozvonLinkRequest struct {
 	ProjectID      int64  `json:"project_id"`
 	ChildSourceIDs []int  `json:"child_source_ids"`
 	RegionIDs      []int  `json:"region_ids"`
+}
+
+// CrmcallsLinkRequest тело создания и обновления связки CRMCalls.
+type CrmcallsLinkRequest struct {
+	Name           string `json:"name"`
+	Type           string `json:"type"`
+	ProjectID      string `json:"project_id"`
+	ChildSourceIDs []int  `json:"child_source_ids"`
+	RegionIDs      []int  `json:"region_ids"`
+}
+
+// CrmcallsSettingsRequest ключ кабинета CRMCalls с вкладки «Исходящий трафик».
+type CrmcallsSettingsRequest struct {
+	APIKey  string `json:"api_key"`
+	BaseURL string `json:"base_url"`
 }
 
 // SkorozvonEventRequest входящий webhook Скорозвона (call_result / form_response).
@@ -47,15 +60,16 @@ type CRMLeadPhone struct {
 
 // CRMLeadAddFields поля crm.lead.add. Неизвестные ключи тоже сохраняются в сырьё.
 type CRMLeadAddFields struct {
-	Phone      []CRMLeadPhone `json:"PHONE"`
-	SourceID   string         `json:"SOURCE_ID" example:"GDMP"`
-	WebID      string         `json:"UF_CRM_1752577998838" example:"web-123"`
-	Operator   string         `json:"UF_CRM_1734523005552" example:"МТС"`
-	Region     string         `json:"UF_CRM_1747216350206" example:"Москва"`
-	Tag        string         `json:"UF_CRM_1766149282" example:"подтверждён"`
-	ProjectNum string         `json:"UF_CRM_1699340770806" example:"12345"`
-	Title      string         `json:"TITLE" example:"Лид"`
-	Name       string         `json:"NAME" example:"Иван"`
+	Phone             []CRMLeadPhone `json:"PHONE"`
+	SourceID          string         `json:"SOURCE_ID" example:"GDMP"`
+	SourceDescription string         `json:"SOURCE_DESCRIPTION" example:"Яндекс.Директ"`
+	WebID             string         `json:"UF_CRM_1752577998838" example:"web-123"`
+	Operator          string         `json:"UF_CRM_1734523005552" example:"МТС"`
+	Region            string         `json:"UF_CRM_1747216350206" example:"Москва"`
+	Tag               string         `json:"UF_CRM_1766149282" example:"подтверждён"`
+	ProjectNum        string         `json:"UF_CRM_1699340770806" example:"12345"`
+	Title             string         `json:"TITLE" example:"Лид"`
+	Name              string         `json:"NAME" example:"Иван"`
 }
 
 // CRMLeadAddRequest тело приёма лида. Те же ключи можно передать query или form: fields[PHONE][0][VALUE].
@@ -65,6 +79,8 @@ type CRMLeadAddRequest struct {
 	Phone string `json:"PHONE,omitempty" example:"79001234567"`
 	// SOURCE_ID на корне, если нет fields.SOURCE_ID.
 	SourceID string `json:"SOURCE_ID,omitempty" example:"GDMP"`
+	// SOURCE_DESCRIPTION на корне, если нет fields.SOURCE_DESCRIPTION.
+	SourceDescription string `json:"SOURCE_DESCRIPTION,omitempty" example:"Яндекс.Директ"`
 	// WebID на корне, если нет fields.UF_CRM_1752577998838.
 	WebID string `json:"UF_CRM_1752577998838,omitempty"`
 }
@@ -89,14 +105,40 @@ type PartnerCheckList struct {
 	Items []entity.PartnerCheck `json:"items"`
 }
 
+// SkorozvonProjectRefreshRequest тело POST /rest/skorozvon/projects/refresh.
+type SkorozvonProjectRefreshRequest struct {
+	UUIDs []string `json:"uuids"`
+}
+
 type SkorozvonProjectList struct {
-	Count int                       `json:"count"`
-	Items []entity.SkorozvonProject `json:"items"`
+	Count  int                       `json:"count"`
+	Total  int                       `json:"total"`
+	Limit  int                       `json:"limit"`
+	Offset int                       `json:"offset"`
+	Items  []entity.SkorozvonProject `json:"items"`
 }
 
 type SkorozvonLinkList struct {
 	Count int                    `json:"count"`
 	Items []entity.SkorozvonLink `json:"items"`
+}
+
+// GoogleSheetRequest тело создания и обновления инстанса Google Sheets.
+type GoogleSheetRequest struct {
+	Name          string          `json:"name"`
+	SpreadsheetID string          `json:"spreadsheet_id"`
+	SheetName     string          `json:"sheet_name"`
+	IsActive      *bool           `json:"is_active"`
+	TestMode      *bool           `json:"test_mode"`
+	ZaryaResults  []string        `json:"zarya_results"`
+	RegionIDs     []int           `json:"region_ids"`
+	StopSourceIDs []int           `json:"stop_source_ids"`
+	Credentials   json.RawMessage `json:"credentials"`
+}
+
+type GoogleSheetList struct {
+	Count int                  `json:"count"`
+	Items []entity.GoogleSheet `json:"items"`
 }
 
 type LeadSourceCountList struct {

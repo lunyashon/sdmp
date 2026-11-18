@@ -4,7 +4,7 @@ const STAGE_OPTIONS = [
   ['1', 'принята'],
   ['2', 'обогащена'],
   ['3', 'в СК'],
-  ['4', 'из СК'],
+  ['4', 'из звонилки'],
   ['5', 'в Б24'],
   ['6', 'отклонена'],
   ['7', 'ожидание'],
@@ -603,6 +603,16 @@ function renderCard(r) {
       ok: true,
     });
   });
+  (r.queues || []).forEach(q => {
+    items.push({
+      at: q.last_retry || r.updated_at || r.created_at || '',
+      type: 'queue',
+      label: 'Отправка: ' + (q.channel || ''),
+      detail: q.count_retry > 0 ? 'повтор ' + q.count_retry : '',
+      pending: true,
+      status: q.status || 'в очереди на отправку',
+    });
+  });
   (r.dispatches || []).forEach(d => {
     const who = d.channel === 'вебхук-партнёр' && d.upk ? `покупатель ${d.upk}` : d.channel;
     const extra = [who, d.project_id, d.external_id ? 'ext ' + d.external_id : ''].filter(Boolean).join(' · ');
@@ -616,8 +626,8 @@ function renderCard(r) {
   });
   items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
   document.getElementById('card-timeline').innerHTML = items.length
-    ? items.map(e => `<div class="tl-item ${e.type === 'dispatch' ? 'tl-dispatch' : ''}">
-        <div class="tl-label">${esc(e.label)}<span class="tl-badge ${e.ok ? 'ok' : 'fail'}">${e.ok ? 'ok' : 'ошибка'}</span></div>
+    ? items.map(e => `<div class="tl-item ${e.type === 'dispatch' ? 'tl-dispatch' : e.type === 'queue' ? 'tl-queue' : ''}">
+        <div class="tl-label">${esc(e.label)}<span class="tl-badge ${e.pending ? 'wait' : e.ok ? 'ok' : 'fail'}">${e.pending ? esc(e.status || 'в очереди на отправку') : (e.ok ? 'ok' : 'ошибка')}</span></div>
         ${e.detail ? `<div class="tl-detail">${esc(e.detail)}</div>` : ''}
         <div class="tl-time">${esc(e.at || '')}</div>
       </div>`).join('')

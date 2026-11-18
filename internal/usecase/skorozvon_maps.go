@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,3 +112,62 @@ func nextSkorozvonMapsAt(now time.Time) time.Time {
 	next := now.AddDate(0, 0, 1)
 	return time.Date(next.Year(), next.Month(), next.Day(), skorozvonMapsHours[0], 0, 0, 0, clock.Location)
 }
+
+func (s *WorkerService) skorozvonCustomFields(ctx context.Context, lead entity.LeadForSkorozvon) map[string]string {
+	if s.maps == nil {
+		return nil
+	}
+	fields, err := s.maps.ListFields(ctx)
+	if err != nil {
+		s.log.ErrorContext(ctx, "skorozvon outgoing map failed", "error", err)
+		return nil
+	}
+	out := map[string]string{}
+	for _, f := range fields {
+		key := strings.TrimSpace(f.SourceKey)
+		if f.FieldID == 0 || key == "" || skorozvonNativeFieldType(f.FieldType) {
+			continue
+		}
+		val := skorozvonOutgoingValue(lead, key)
+		if val == "" {
+			continue
+		}
+		out[fmt.Sprintf("FIELD_%d", f.FieldID)] = val
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func skorozvonNativeFieldType(fieldType string) bool {
+	switch strings.ToLower(strings.TrimSpace(fieldType)) {
+	case "phones", "external_id", "city", "region", "name", "emails":
+		return true
+	default:
+		return false
+	}
+}
+
+func skorozvonOutgoingValue(lead entity.LeadForSkorozvon, sourceKey string) string {
+	switch strings.ToLower(strings.TrimSpace(sourceKey)) {
+	case "uuid":
+		return strings.TrimSpace(lead.UUID)
+	case "cold_label":
+		return strings.TrimSpace(lead.ColdLabel)
+	case "zarya":
+		return strings.TrimSpace(lead.Zarya)
+	case "lead_id":
+		if lead.ID <= 0 {
+			return ""
+		}
+		return strconv.FormatInt(lead.ID, 10)
+	case "source_description":
+		return strings.TrimSpace(lead.SourceDescription)
+	case "phone":
+		return strings.TrimSpace(lead.Phone)
+	default:
+		return ""
+	}
+}
+

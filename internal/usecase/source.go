@@ -31,8 +31,29 @@ type CreateChildInput struct {
 	BaseLabel  string
 }
 
+type CreateSourceInput struct {
+	Name       string
+	BitrixCode string
+	ColdLabel  string
+	BaseLabel  string
+}
+
 func (s *SourceService) List(ctx context.Context) ([]entity.Source, error) {
 	return s.repo.List(ctx)
+}
+
+func (s *SourceService) Create(ctx context.Context, in CreateSourceInput) (entity.Source, error) {
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		return entity.Source{}, fmt.Errorf("%w: name is required", domain.ErrInvalidInput)
+	}
+	return s.repo.Create(ctx, entity.Source{
+		Name:       name,
+		BitrixCode: strings.TrimSpace(in.BitrixCode),
+		ColdLabel:  strings.TrimSpace(in.ColdLabel),
+		BaseLabel:  strings.TrimSpace(in.BaseLabel),
+		IsActive:   true,
+	})
 }
 
 func (s *SourceService) CreateChild(ctx context.Context, in CreateChildInput) (entity.Source, error) {

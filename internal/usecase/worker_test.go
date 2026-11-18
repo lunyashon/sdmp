@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"github.com/lunyashon/sdmp/internal/domain/entity"
 	"github.com/lunyashon/sdmp/internal/lib/crm"
 	"github.com/lunyashon/sdmp/internal/lib/phonesearch"
+	"github.com/lunyashon/sdmp/internal/lib/recordinglink"
 	"github.com/lunyashon/sdmp/internal/port"
 )
 
@@ -57,6 +59,7 @@ type stubOutboxBx24 struct {
 	stale     time.Duration
 	n         int
 	completed []string
+	retries   []stubOutboxRetry
 }
 
 func (s *stubOutboxBx24) Complete(_ context.Context, uuid string) error {
@@ -64,10 +67,65 @@ func (s *stubOutboxBx24) Complete(_ context.Context, uuid string) error {
 	return nil
 }
 
-func (s *stubOutboxBx24) Claim(_ context.Context, limit int, staleAfter time.Duration) ([]entity.OutboxBx24, error) {
+func (s *stubOutboxBx24) MarkRetry(_ context.Context, uuid string, countRetry int16, lockFor time.Duration) error {
+	s.retries = append(s.retries, stubOutboxRetry{uuid: uuid, countRetry: countRetry, lockFor: lockFor})
+	return nil
+}
+
+func (s *stubOutboxBx24) Claim(_ context.Context, limit int, lockFor time.Duration) ([]entity.OutboxBx24, error) {
 	s.n++
 	s.limit = limit
-	s.stale = staleAfter
+	s.stale = lockFor
+	if s.claimErr != nil {
+		return nil, s.claimErr
+	}
+	return s.items, nil
+}
+
+type stubOutboxSkorozvon struct {
+	items      []entity.OutboxSkorozvon
+	enqueued   []string
+	claimErr   error
+	enqueueErr error
+	limit      int
+	lockFor    time.Duration
+	n          int
+	completed  []string
+	retries    []stubOutboxRetry
+}
+
+type stubOutboxRetry struct {
+	uuid       string
+	countRetry int16
+	lockFor    time.Duration
+}
+
+func (s *stubOutboxSkorozvon) Enqueue(_ context.Context, leadUUID string) error {
+	if s.enqueueErr != nil {
+		return s.enqueueErr
+	}
+	s.enqueued = append(s.enqueued, leadUUID)
+	return nil
+}
+
+func (s *stubOutboxSkorozvon) EnqueueResend(_ context.Context, leadUUID string, _ *int64) error {
+	return s.Enqueue(context.Background(), leadUUID)
+}
+
+func (s *stubOutboxSkorozvon) Complete(_ context.Context, uuid string) error {
+	s.completed = append(s.completed, uuid)
+	return nil
+}
+
+func (s *stubOutboxSkorozvon) MarkRetry(_ context.Context, uuid string, countRetry int16, lockFor time.Duration) error {
+	s.retries = append(s.retries, stubOutboxRetry{uuid: uuid, countRetry: countRetry, lockFor: lockFor})
+	return nil
+}
+
+func (s *stubOutboxSkorozvon) Claim(_ context.Context, limit int, lockFor time.Duration) ([]entity.OutboxSkorozvon, error) {
+	s.n++
+	s.limit = limit
+	s.lockFor = lockFor
 	if s.claimErr != nil {
 		return nil, s.claimErr
 	}
@@ -79,13 +137,13 @@ func TestProcessBx24ClaimsUnlocked(t *testing.T) {
 		{UUID: "task-1", LeadUUID: "lead-aaa"},
 		{UUID: "task-2", LeadUUID: "lead-bbb"},
 	}}
-	svc := NewWorkerService(&stubOutbox{}, nil, nil, nil, nil, nil, nil, 1).WithOutboxBx24(box)
-	svc.createBx24 = false
+	leads := &stubLeads{byUUID: entity.LeadDetail{ViaUs: false}}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).WithOutboxBx24(box)
 	n, err := svc.ProcessBx24(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 || box.n != 1 || box.stale != 5*time.Minute {
+	if n != 2 || box.n != 1 || box.stale != 2*time.Minute {
 		t.Fatalf("n=%d calls=%d stale=%s", n, box.n, box.stale)
 	}
 	if len(box.completed) != 2 || box.completed[0] != "task-1" || box.completed[1] != "task-2" {
@@ -93,16 +151,15 @@ func TestProcessBx24ClaimsUnlocked(t *testing.T) {
 	}
 }
 
-func TestProcessBx24DrainsWithoutBitrix(t *testing.T) {
+func TestProcessBx24DropsWhenNotViaUs(t *testing.T) {
 	box := &stubOutboxBx24{items: []entity.OutboxBx24{
 		{UUID: "task-1", LeadUUID: "lead-aaa"},
 	}}
-	leads := &stubLeads{byUUID: entity.LeadDetail{UUID: "lead-aaa", Phone: "79001234567"}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{UUID: "lead-aaa", Phone: "79001234567", ViaUs: false}}
 	api := &stubBx24{id: 0, addID: 77, addRaw: []byte(`{"result":77}`)}
 	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
 		WithOutboxBx24(box).
 		WithBx24(api)
-	svc.createBx24 = false
 
 	n, err := svc.ProcessBx24(context.Background())
 	if err != nil || n != 1 {
@@ -128,15 +185,15 @@ func TestProcessBx24EmptyWithoutRepo(t *testing.T) {
 }
 
 type stubBx24 struct {
-	id      int64
-	raw     []byte
-	err     error
+	id        int64
+	raw       []byte
+	err       error
 	addID     int64
 	addRaw    []byte
 	addStatus int
 	addErr    error
-	keys    []string
-	payload []byte
+	keys      []string
+	payload   []byte
 }
 
 func (s *stubBx24) SearchLead(_ context.Context, key string) (crm.LeadSearchResult, error) {
@@ -157,7 +214,7 @@ func TestProcessBx24BindsWhenFound(t *testing.T) {
 	box := &stubOutboxBx24{items: []entity.OutboxBx24{
 		{UUID: "task-1", LeadUUID: "lead-aaa"},
 	}}
-	leads := &stubLeads{}
+	leads := &stubLeads{byUUID: entity.LeadDetail{UUID: "lead-aaa", ViaUs: true}}
 	api := &stubBx24{id: 51037210991, raw: []byte(`{"result":51037210991}`)}
 	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
 		WithOutboxBx24(box).
@@ -189,9 +246,12 @@ func TestProcessBx24AddsWhenMissing(t *testing.T) {
 		Region:   "Москва",
 		City:     "Химки",
 		Operator: "БИЛАЙН",
+		ViaUs:    true,
 		AnketaFields: []entity.SkorozvonAnketaFieldItem{
 			{FieldName: "Сумма долга", EnumName: "Более 500 тыс."},
 			{FieldName: "Вид долга", EnumName: "Потребительские кредиты"},
+			{FieldName: "Регион клиента", EnumName: "Москва"},
+			{FieldName: "Оператор", EnumName: "Жарина Анастасия Юрьевна"},
 		},
 	}}
 	api := &stubBx24{id: 0, raw: []byte(`{"result":0}`), addID: 77, addRaw: []byte(`{"result":77}`)}
@@ -207,7 +267,7 @@ func TestProcessBx24AddsWhenMissing(t *testing.T) {
 	if len(api.payload) == 0 {
 		t.Fatal("add not called")
 	}
-	if string(api.payload) == "" || !containsAll(string(api.payload), "79001234567", "UF_CRM_1788705605", "lead-aaa", "Москва", "Химки", "БИЛАЙН", "Более 500 тыс.", "Потребительские кредиты") {
+	if string(api.payload) == "" || !containsAll(string(api.payload), "79001234567", "UF_CRM_1788705605", "lead-aaa", "Москва", "Химки", "Жарина Анастасия Юрьевна", "Более 500 тыс.", "Потребительские кредиты") {
 		t.Fatalf("payload %s", api.payload)
 	}
 	if len(leads.bitrixBinds) != 1 || leads.bitrixBinds[0] != [2]string{"lead-aaa", "77"} {
@@ -225,6 +285,7 @@ func TestProcessBx24AddsEvenWithSkorozvonBitrixField(t *testing.T) {
 	leads := &stubLeads{byUUID: entity.LeadDetail{
 		UUID:  "lead-aaa",
 		Phone: "79001234567",
+		ViaUs: true,
 		AnketaFields: []entity.SkorozvonAnketaFieldItem{
 			{FieldName: "ID лида Б24", EnumID: 17976350},
 			{FieldName: "Сумма долга", EnumName: "300-400 тыс."},
@@ -252,7 +313,7 @@ func TestProcessBx24KeepsWhenAddFails(t *testing.T) {
 	box := &stubOutboxBx24{items: []entity.OutboxBx24{
 		{UUID: "task-1", LeadUUID: "lead-aaa"},
 	}}
-	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 42, UUID: "lead-aaa", Phone: "79001234567"}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 42, UUID: "lead-aaa", Phone: "79001234567", ViaUs: true}}
 	api := &stubBx24{id: 0, addErr: errors.New("timeout")}
 	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
 		WithOutboxBx24(box).
@@ -272,6 +333,9 @@ func TestProcessBx24KeepsWhenAddFails(t *testing.T) {
 	if leads.dispatches[0].RawResponse != "timeout" {
 		t.Fatalf("dispatch %+v", leads.dispatches[0])
 	}
+	if len(box.retries) != 1 || box.retries[0].uuid != "task-1" || box.retries[0].countRetry != 1 || box.retries[0].lockFor != 5*time.Minute {
+		t.Fatalf("retries %+v", box.retries)
+	}
 }
 
 func TestProcessBx24WritesDispatchWhenAddRejected(t *testing.T) {
@@ -279,7 +343,7 @@ func TestProcessBx24WritesDispatchWhenAddRejected(t *testing.T) {
 		{UUID: "task-1", LeadUUID: "lead-aaa"},
 	}}
 	body := `{"result":false,"error":"Лид с таким телефоном и SOURCE_ID создавался за последние 10 часов"}`
-	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 12332286, UUID: "lead-aaa", Phone: "79613523563"}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 12332286, UUID: "lead-aaa", Phone: "79613523563", ViaUs: true}}
 	api := &stubBx24{
 		id:        0,
 		addStatus: 400,
@@ -307,6 +371,46 @@ func TestProcessBx24WritesDispatchWhenAddRejected(t *testing.T) {
 	}
 	if d.HTTPStatus == nil || *d.HTTPStatus != 400 || d.RawResponse != body {
 		t.Fatalf("dispatch %+v", d)
+	}
+	if len(box.retries) != 1 || box.retries[0].countRetry != 1 || box.retries[0].lockFor != 5*time.Minute {
+		t.Fatalf("retries %+v", box.retries)
+	}
+}
+
+func TestProcessBx24RetriesExhausted(t *testing.T) {
+	box := &stubOutboxBx24{items: []entity.OutboxBx24{
+		{UUID: "task-1", LeadUUID: "lead-aaa", CountRetry: 5},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 42, UUID: "lead-aaa", Phone: "79001234567", ViaUs: true}}
+	api := &stubBx24{id: 0, addErr: errors.New("timeout")}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxBx24(box).
+		WithBx24(api)
+
+	n, err := svc.ProcessBx24(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(box.completed) != 0 {
+		t.Fatalf("completed %v", box.completed)
+	}
+	if len(box.retries) != 1 || box.retries[0].countRetry != 6 || box.retries[0].lockFor != -1 {
+		t.Fatalf("retries %+v", box.retries)
+	}
+}
+
+func TestNextBx24OutboxRetry(t *testing.T) {
+	next, delay, exhausted := nextBx24OutboxRetry(0)
+	if next != 1 || delay != 5*time.Minute || exhausted {
+		t.Fatalf("first %+v %s %v", next, delay, exhausted)
+	}
+	next, delay, exhausted = nextBx24OutboxRetry(4)
+	if next != 5 || delay != 5*time.Minute || exhausted {
+		t.Fatalf("last auto %+v %s %v", next, delay, exhausted)
+	}
+	next, delay, exhausted = nextBx24OutboxRetry(5)
+	if next != 6 || delay != 0 || !exhausted {
+		t.Fatalf("exhausted %+v %s %v", next, delay, exhausted)
 	}
 }
 
@@ -388,6 +492,24 @@ func TestProcessReleasesOnHandleError(t *testing.T) {
 	}
 }
 
+func TestProcessContinuesAfterHandleError(t *testing.T) {
+	box := &stubOutbox{msgs: []entity.OutboxMessage{
+		{ID: 1, LeadRowID: 10, Payload: `{`},
+		{ID: 2, LeadRowID: 11, SourceID: 2, Payload: `{"fields":{"PHONE":"79001234567"}}`},
+	}}
+	svc := NewWorkerService(box, nil, nil, nil, nil, nil, nil, 1)
+	n, err := svc.Process(context.Background())
+	if err == nil {
+		t.Fatal("expected first error")
+	}
+	if n != 1 || len(box.completed) != 1 || box.completed[0] != 2 {
+		t.Fatalf("n=%d completed=%v", n, box.completed)
+	}
+	if box.released != "tok-1" {
+		t.Fatalf("must release leftover, got %q", box.released)
+	}
+}
+
 func TestProcessCompleteError(t *testing.T) {
 	box := &stubOutbox{
 		msgs:        []entity.OutboxMessage{{ID: 1, LeadRowID: 10, Payload: `{"fields":{"PHONE":"79001234567"}}`}},
@@ -449,6 +571,13 @@ type stubLeads struct {
 	zaryaLeadID    int64
 	zaryaDup       bool
 	zaryaSaved     bool
+	sentProjects   map[string]bool
+}
+
+func (s *stubLeads) HasSkorozvonSent(_ context.Context, _ int64, projectID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sentProjects[projectID], nil
 }
 
 func (s *stubLeads) BindSkorozvon(_ context.Context, leadID int64, skorozvonLeadID, projectID string) error {
@@ -473,6 +602,24 @@ func (s *stubLeads) GetByUUID(_ context.Context, uuid string) (entity.LeadDetail
 	return d, nil
 }
 
+func (s *stubLeads) GetForSkorozvon(_ context.Context, uuid string) (entity.LeadForSkorozvon, error) {
+	d := s.byUUID
+	if d.UUID == "" {
+		d.UUID = uuid
+	}
+	return entity.LeadForSkorozvon{
+		ID:                d.ID,
+		UUID:              d.UUID,
+		Phone:             d.Phone,
+		ChildSourceID:     d.ChildSourceID,
+		Region:            d.Region,
+		RegionID:          d.RegionID,
+		Zarya:             d.Zarya,
+		ColdLabel:         d.ColdLabel,
+		SourceDescription: d.SourceDescription,
+	}, nil
+}
+
 func (s *stubLeads) UpdateEnrichment(_ context.Context, leadID int64, in entity.LeadEnrichment) error {
 	s.leadID = leadID
 	s.got = in
@@ -486,6 +633,8 @@ func (s *stubLeads) SaveZaryaResult(_ context.Context, leadID int64, duplicate b
 	return nil
 }
 
+func (s *stubLeads) SaveZaryaOldResult(context.Context, int64, bool) error { return nil }
+
 func (s *stubLeads) InsertDispatch(_ context.Context, in entity.Dispatch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -496,18 +645,24 @@ func (s *stubLeads) InsertDispatch(_ context.Context, in entity.Dispatch) error 
 type stubPhoneSearch struct {
 	operator  string
 	region    string
+	territory string
 	duplicate bool
 }
 
 func (s stubPhoneSearch) Search(context.Context, string) (phonesearch.Result, error) {
 	return phonesearch.Result{Number: phonesearch.NumberInfo{
-		Operator: s.operator,
-		Region:   s.region,
+		Operator:  s.operator,
+		Region:    s.region,
+		Territory: s.territory,
 	}}, nil
 }
 
 func (s stubPhoneSearch) CheckDuplicate(context.Context, string) (bool, error) {
 	return s.duplicate, nil
+}
+
+func (s stubPhoneSearch) CheckDuplicateOld(context.Context, string) (bool, bool, error) {
+	return false, false, nil
 }
 
 func TestHandleEnrichesFromLookup(t *testing.T) {
@@ -545,6 +700,62 @@ func TestHandleEnrichesFromLookup(t *testing.T) {
 	}
 	if !leads.zaryaSaved || leads.zaryaLeadID != 42 || leads.zaryaDup {
 		t.Fatalf("zarya saved=%v id=%d dup=%v", leads.zaryaSaved, leads.zaryaLeadID, leads.zaryaDup)
+	}
+}
+
+func TestHandleUsesTerritoryWhenRegionPlaceholder(t *testing.T) {
+	leads := &stubLeads{}
+	svc := NewWorkerService(
+		&stubOutbox{},
+		stubPhoneSearch{operator: `ПАО "МЕГАФОН"`, region: "-", territory: "Самарская область"},
+		stubDicts{
+			regions:   map[string]int{"Самарская область": 33},
+			operators: map[string]int{"МЕГАФОН": 2, "ДРУГИЕ": 4},
+		},
+		leads,
+		nil,
+		nil,
+		nil,
+		1,
+	)
+	err := svc.Handle(context.Background(), entity.OutboxMessage{
+		LeadRowID: 42,
+		Payload:   `{"fields":{"PHONE":"79001234567","UF_CRM_1747216350206":"-"}}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leads.got.RegionID == nil || *leads.got.RegionID != 33 {
+		t.Fatalf("region %+v", leads.got)
+	}
+	if leads.got.RegionSource != entity.GeoSourceLookup {
+		t.Fatalf("region source %d", leads.got.RegionSource)
+	}
+}
+
+func TestHandlePhoneSearchEmptyUsesOther(t *testing.T) {
+	leads := &stubLeads{}
+	svc := NewWorkerService(
+		&stubOutbox{},
+		stubPhoneSearch{},
+		stubDicts{operators: map[string]int{"ДРУГИЕ": 4}},
+		leads,
+		nil,
+		nil,
+		nil,
+		1,
+	)
+	if err := svc.Handle(context.Background(), entity.OutboxMessage{
+		LeadRowID: 9,
+		Payload:   `{"fields":{"PHONE":"79409993206"}}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if leads.got.StatusID != entity.StatusEnriched {
+		t.Fatalf("status %d", leads.got.StatusID)
+	}
+	if leads.got.OperatorID == nil || *leads.got.OperatorID != 4 || leads.got.OperatorSource != entity.GeoSourceUnknown {
+		t.Fatalf("operator %+v", leads.got)
 	}
 }
 
@@ -884,6 +1095,76 @@ func TestHandleSendsPartnersInParallel(t *testing.T) {
 	}
 }
 
+func TestHandleAppendsGoogleSheet(t *testing.T) {
+	sheets := &stubRouteGoogleSheets{items: []entity.GoogleSheetTarget{
+		{ID: 1, Name: "Телефоны", SpreadsheetID: "sheet-id", SheetName: "Телефоны", Credentials: []byte(`{"client_email":"dev@example.com"}`)},
+	}}
+	api := &stubGoogleAPI{}
+	leads := &stubLeads{}
+	svc := NewWorkerService(
+		&stubOutbox{},
+		nil,
+		stubDicts{operators: map[string]int{"МТС": 2, "ДРУГИЕ": 4}},
+		leads,
+		nil,
+		nil,
+		nil,
+		1,
+	).WithGoogleSheets(sheets, api)
+	if err := svc.Handle(context.Background(), entity.OutboxMessage{
+		LeadRowID: 9,
+		SourceID:  12,
+		Payload:   `{"fields":{"PHONE":"79001234567","UF_CRM_1734523005552":"МТС","UF_CRM_1747216350206":"Москва"}}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if sheets.gotZarya != "unique" || sheets.gotSource != 12 {
+		t.Fatalf("filter zarya=%s source=%d", sheets.gotZarya, sheets.gotSource)
+	}
+	if len(api.phones) != 1 || api.phones[0] != "79001234567" {
+		t.Fatalf("phones %v", api.phones)
+	}
+	if len(leads.dispatches) != 1 || leads.dispatches[0].ChannelID != entity.ChannelGoogle || !leads.dispatches[0].SentOK {
+		t.Fatalf("dispatch %+v", leads.dispatches)
+	}
+}
+
+type stubRouteGoogleSheets struct {
+	gotZarya  string
+	gotRegion *int
+	gotSource int
+	items     []entity.GoogleSheetTarget
+}
+
+func (s *stubRouteGoogleSheets) List(context.Context) ([]entity.GoogleSheet, error) { return nil, nil }
+func (s *stubRouteGoogleSheets) Get(context.Context, int) (entity.GoogleSheet, error) {
+	return entity.GoogleSheet{}, nil
+}
+func (s *stubRouteGoogleSheets) Create(context.Context, entity.GoogleSheet, json.RawMessage) (entity.GoogleSheet, error) {
+	return entity.GoogleSheet{}, nil
+}
+func (s *stubRouteGoogleSheets) Update(context.Context, entity.GoogleSheet, json.RawMessage) (entity.GoogleSheet, error) {
+	return entity.GoogleSheet{}, nil
+}
+func (s *stubRouteGoogleSheets) Delete(context.Context, int) error { return nil }
+func (s *stubRouteGoogleSheets) ListRoutable(_ context.Context, zarya string, regionID *int, sourceID int) ([]entity.GoogleSheetTarget, error) {
+	s.gotZarya = zarya
+	s.gotRegion = regionID
+	s.gotSource = sourceID
+	return s.items, nil
+}
+
+type stubGoogleAPI struct {
+	phones []string
+}
+
+func (s *stubGoogleAPI) AppendRow(_ context.Context, _ json.RawMessage, _, _ string, values []string) (int, []byte, error) {
+	if len(values) > 0 {
+		s.phones = append(s.phones, values[0])
+	}
+	return 200, []byte(`{"ok":true}`), nil
+}
+
 func TestHandlePartner400WritesDispatchAndContinues(t *testing.T) {
 	leads := &stubLeads{}
 	poster := &stubPoster{statuses: []int{400}}
@@ -972,6 +1253,7 @@ func (s *stubRouteLinks) Create(context.Context, entity.SkorozvonLink) (entity.S
 func (s *stubRouteLinks) Update(context.Context, entity.SkorozvonLink) (entity.SkorozvonLink, error) {
 	return entity.SkorozvonLink{}, nil
 }
+func (s *stubRouteLinks) Delete(context.Context, int) error { return nil }
 func (s *stubRouteLinks) ListRoutable(_ context.Context, kind string, childSourceID int, regionID *int) ([]entity.SkorozvonLink, error) {
 	s.gotKind = kind
 	s.gotChild = childSourceID
@@ -1014,8 +1296,199 @@ func (s *stubSkorozvonSend) CheckProject(context.Context, int64) bool {
 func (s *stubSkorozvonSend) ListCustomFields(context.Context) ([]port.SkorozvonCustomField, error) {
 	return nil, nil
 }
+func (s *stubSkorozvonSend) ListCallProjects(context.Context) ([]port.SkorozvonCallProject, error) {
+	return nil, nil
+}
+func (s *stubSkorozvonSend) DownloadCallRecording(context.Context, string) ([]byte, string, error) {
+	return nil, "", nil
+}
 
-func TestHandleSendsSkorozvonInParallel(t *testing.T) {
+func TestHandleEnqueuesOutboxSkorozvon(t *testing.T) {
+	box := &stubOutboxSkorozvon{}
+	api := &stubSkorozvonSend{statuses: []int{200}}
+	svc := NewWorkerService(
+		&stubOutbox{},
+		nil,
+		stubDicts{operators: map[string]int{"МТС": 2, "ДРУГИЕ": 4}},
+		&stubLeads{},
+		nil,
+		nil,
+		nil,
+		1,
+	).WithOutboxSkorozvon(box).WithSkorozvon(&stubRouteLinks{items: []entity.SkorozvonLink{
+		{ID: 1, Name: "Тест", Type: "uniq", ProjectID: 9},
+	}}, api)
+
+	err := svc.Handle(context.Background(), entity.OutboxMessage{
+		LeadRowID: 7,
+		LeadUUID:  "11111111-1111-4111-8111-111111111111",
+		SourceID:  10,
+		Payload:   `{"fields":{"PHONE":"79001234567","UF_CRM_1734523005552":"МТС"}}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(box.enqueued) != 1 || box.enqueued[0] != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("enqueued %+v", box.enqueued)
+	}
+	if api.n != 0 {
+		t.Fatalf("skorozvon called %d", api.n)
+	}
+}
+
+func TestProcessSkorozvonSendsAndCompletes(t *testing.T) {
+	box := &stubOutboxSkorozvon{items: []entity.OutboxSkorozvon{
+		{UUID: "task-1", LeadUUID: "lead-aaa"},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{
+		ID: 7, UUID: "lead-aaa", Phone: "79001234567", Region: "Москва", Zarya: "Чистый",
+	}}
+	api := &stubSkorozvonSend{statuses: []int{200}, leadIDs: []int{501}}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxSkorozvon(box).
+		WithSkorozvon(&stubRouteLinks{items: []entity.SkorozvonLink{
+			{ID: 1, Name: "Уник", Type: "uniq", ProjectID: 9},
+		}}, api)
+
+	n, err := svc.ProcessSkorozvon(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || box.n != 1 || box.lockFor != 2*time.Minute {
+		t.Fatalf("n=%d calls=%d lock=%s", n, box.n, box.lockFor)
+	}
+	if api.n != 1 {
+		t.Fatalf("skorozvon calls %d", api.n)
+	}
+	if len(box.completed) != 1 || box.completed[0] != "task-1" {
+		t.Fatalf("completed %v", box.completed)
+	}
+	if len(box.retries) != 0 {
+		t.Fatalf("retries %v", box.retries)
+	}
+}
+
+func TestProcessSkorozvonImportSendsOnlyToProject(t *testing.T) {
+	projectID := int64(50000191177)
+	box := &stubOutboxSkorozvon{items: []entity.OutboxSkorozvon{
+		{UUID: "task-1", LeadUUID: "lead-aaa", ProjectID: &projectID},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{
+		ID: 7, UUID: "lead-aaa", Phone: "79001234567", Region: "Москва",
+	}}
+	links := &stubRouteLinks{items: []entity.SkorozvonLink{
+		{ID: 1, Name: "Уник", Type: "uniq", ProjectID: 9},
+		{ID: 2, Name: "Дубли", Type: "dup", ProjectID: 10},
+	}}
+	api := &stubSkorozvonSend{statuses: []int{200}, leadIDs: []int{501}}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxSkorozvon(box).
+		WithSkorozvon(links, api)
+
+	n, err := svc.ProcessSkorozvon(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if links.gotKind != "" {
+		t.Fatalf("import must not route by links, got kind %q", links.gotKind)
+	}
+	if api.n != 1 || len(api.calls) != 1 || api.calls[0].ProjectID != projectID {
+		t.Fatalf("calls %+v", api.calls)
+	}
+	if len(box.completed) != 1 || box.completed[0] != "task-1" {
+		t.Fatalf("completed %v", box.completed)
+	}
+	if len(leads.skorozvonBinds) != 1 || leads.skorozvonBinds[0][2] != "50000191177" {
+		t.Fatalf("binds %v", leads.skorozvonBinds)
+	}
+}
+
+func TestProcessSkorozvonImportWithoutLinks(t *testing.T) {
+	projectID := int64(88)
+	box := &stubOutboxSkorozvon{items: []entity.OutboxSkorozvon{
+		{UUID: "task-1", LeadUUID: "lead-aaa", ProjectID: &projectID},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 7, UUID: "lead-aaa", Phone: "79001234567"}}
+	api := &stubSkorozvonSend{statuses: []int{200}, leadIDs: []int{601}}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxSkorozvon(box).
+		WithSkorozvon(&stubRouteLinks{}, api)
+
+	n, err := svc.ProcessSkorozvon(context.Background())
+	if err != nil || n != 1 || api.n != 1 || api.calls[0].ProjectID != 88 {
+		t.Fatalf("n=%d err=%v calls %+v", n, err, api.calls)
+	}
+	if len(box.completed) != 1 {
+		t.Fatalf("completed %v", box.completed)
+	}
+}
+
+func TestProcessSkorozvonSchedulesOutboxRetry(t *testing.T) {
+	box := &stubOutboxSkorozvon{items: []entity.OutboxSkorozvon{
+		{UUID: "task-1", LeadUUID: "lead-aaa", CountRetry: 0},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 7, UUID: "lead-aaa", Phone: "79001234567"}}
+	api := &stubSkorozvonSend{statuses: []int{429, 429, 429, 429, 429}}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxSkorozvon(box).
+		WithSkorozvon(&stubRouteLinks{items: []entity.SkorozvonLink{
+			{ID: 1, Name: "Тест", Type: "uniq", ProjectID: 9},
+		}}, api)
+	svc.skorozvonWaits = []time.Duration{time.Nanosecond, time.Nanosecond, time.Nanosecond, time.Nanosecond}
+
+	n, err := svc.ProcessSkorozvon(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(box.completed) != 0 {
+		t.Fatalf("completed %v", box.completed)
+	}
+	if len(box.retries) != 1 || box.retries[0].uuid != "task-1" || box.retries[0].countRetry != 1 || box.retries[0].lockFor != time.Minute {
+		t.Fatalf("retries %+v", box.retries)
+	}
+}
+
+func TestProcessSkorozvonExhaustsRetries(t *testing.T) {
+	box := &stubOutboxSkorozvon{items: []entity.OutboxSkorozvon{
+		{UUID: "task-1", LeadUUID: "lead-aaa", CountRetry: 5},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 7, UUID: "lead-aaa", Phone: "79001234567"}}
+	api := &stubSkorozvonSend{statuses: []int{500, 500, 500, 500, 500}}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxSkorozvon(box).
+		WithSkorozvon(&stubRouteLinks{items: []entity.SkorozvonLink{
+			{ID: 1, Name: "Тест", Type: "uniq", ProjectID: 9},
+		}}, api)
+	svc.skorozvonWaits = []time.Duration{time.Nanosecond}
+
+	n, err := svc.ProcessSkorozvon(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(box.completed) != 0 {
+		t.Fatalf("completed %v", box.completed)
+	}
+	if len(box.retries) != 1 || box.retries[0].countRetry != 6 || box.retries[0].lockFor != -1 {
+		t.Fatalf("retries %+v", box.retries)
+	}
+}
+
+func TestNextSkorozvonOutboxRetry(t *testing.T) {
+	next, delay, exhausted := nextSkorozvonOutboxRetry(0)
+	if next != 1 || delay != time.Minute || exhausted {
+		t.Fatalf("first %+v %s %v", next, delay, exhausted)
+	}
+	next, delay, exhausted = nextSkorozvonOutboxRetry(4)
+	if next != 5 || delay != 30*time.Minute || exhausted {
+		t.Fatalf("last auto %+v %s %v", next, delay, exhausted)
+	}
+	next, delay, exhausted = nextSkorozvonOutboxRetry(5)
+	if next != 6 || delay != 0 || !exhausted {
+		t.Fatalf("exhausted %+v %s %v", next, delay, exhausted)
+	}
+}
+
+func TestSendToSkorozvonInParallel(t *testing.T) {
 	child := 20
 	leads := &stubLeads{}
 	links := &stubRouteLinks{items: []entity.SkorozvonLink{
@@ -1025,23 +1498,19 @@ func TestHandleSendsSkorozvonInParallel(t *testing.T) {
 	api := &stubSkorozvonSend{statuses: []int{200, 200}, leadIDs: []int{501, 502}}
 	svc := NewWorkerService(
 		&stubOutbox{},
-		stubPhoneSearch{duplicate: true},
-		stubDicts{operators: map[string]int{"МТС": 2, "ДРУГИЕ": 4}},
+		nil,
+		nil,
 		leads,
-		&stubSplitResolve{ruleByKey: map[string]entity.SplitResolve{
-			"10:2": {SplitRule: entity.SplitRule{ChildSourceID: child}},
-		}},
+		nil,
 		nil,
 		nil,
 		1,
 	).WithSkorozvon(links, api)
 
-	err := svc.Handle(context.Background(), entity.OutboxMessage{
-		LeadRowID: 7,
-		LeadUUID:  "11111111-1111-4111-8111-111111111111",
-		SourceID:  10,
-		Payload:   `{"fields":{"PHONE":"79001234567","UF_CRM_1734523005552":"МТС","UF_CRM_1747216350206":"Москва"}}`,
-	})
+	err := svc.sendToSkorozvon(context.Background(), entity.LeadForSkorozvon{
+		ID: 7, UUID: "11111111-1111-4111-8111-111111111111", Phone: "79001234567",
+		ChildSourceID: &child, Region: "Москва",
+	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1074,33 +1543,137 @@ func TestHandleSendsSkorozvonInParallel(t *testing.T) {
 	}
 }
 
-func TestHandleSkorozvon429RetriesThenWritesFailedDispatch(t *testing.T) {
+func TestSendToSkorozvonSkipsAlreadySentProject(t *testing.T) {
 	child := 20
-	leads := &stubLeads{}
-	api := &stubSkorozvonSend{statuses: []int{429, 429, 429, 429}}
+	leads := &stubLeads{sentProjects: map[string]bool{"4410": true}}
+	links := &stubRouteLinks{items: []entity.SkorozvonLink{
+		{ID: 1, Name: "Дубли МСК", Type: "dup", ProjectID: 4410},
+		{ID: 2, Name: "Дубли Юг", Type: "dup", ProjectID: 4411},
+	}}
+	api := &stubSkorozvonSend{statuses: []int{200}, leadIDs: []int{502}}
 	svc := NewWorkerService(
 		&stubOutbox{},
 		nil,
-		stubDicts{operators: map[string]int{"МТС": 2, "ДРУГИЕ": 4}},
+		nil,
 		leads,
-		&stubSplitResolve{ruleByKey: map[string]entity.SplitResolve{
-			"10:2": {SplitRule: entity.SplitRule{ChildSourceID: child}},
-		}},
+		nil,
+		nil,
+		nil,
+		1,
+	).WithSkorozvon(links, api)
+
+	err := svc.sendToSkorozvon(context.Background(), entity.LeadForSkorozvon{
+		ID: 7, UUID: "11111111-1111-4111-8111-111111111111", Phone: "79001234567",
+		ChildSourceID: &child, Region: "Москва",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api.n != 1 {
+		t.Fatalf("calls=%d", api.n)
+	}
+	if api.calls[0].ProjectID != 4411 {
+		t.Fatalf("project %d", api.calls[0].ProjectID)
+	}
+	if len(leads.dispatches) != 1 || leads.dispatches[0].SkorozvonProjectID != "4411" {
+		t.Fatalf("dispatch %+v", leads.dispatches)
+	}
+	if len(leads.skorozvonBinds) != 1 || leads.skorozvonBinds[0][2] != "4411" {
+		t.Fatalf("binds %+v", leads.skorozvonBinds)
+	}
+}
+
+func TestRetrySkorozvon(t *testing.T) {
+	if !retrySkorozvon(429, nil) || !retrySkorozvon(500, nil) || !retrySkorozvon(0, errors.New("net")) {
+		t.Fatal("retryable")
+	}
+	if retrySkorozvon(422, errors.New("http 422")) || retrySkorozvon(400, nil) || retrySkorozvon(200, nil) {
+		t.Fatal("permanent")
+	}
+}
+
+func TestSendToSkorozvon422DoesNotRetry(t *testing.T) {
+	child := 20
+	leads := &stubLeads{}
+	api := &stubSkorozvonSend{statuses: []int{422, 422, 422, 422, 422}}
+	svc := NewWorkerService(
+		&stubOutbox{},
+		nil,
+		nil,
+		leads,
+		nil,
 		nil,
 		nil,
 		1,
 	).WithSkorozvon(&stubRouteLinks{items: []entity.SkorozvonLink{
 		{ID: 1, Name: "Тест", Type: "unique", ProjectID: 9},
 	}}, api)
-	svc.retryWaits = []time.Duration{time.Nanosecond, time.Nanosecond, time.Nanosecond}
+	svc.skorozvonWaits = []time.Duration{time.Nanosecond, time.Nanosecond, time.Nanosecond}
 
-	err := svc.Handle(context.Background(), entity.OutboxMessage{
-		LeadRowID: 9,
-		SourceID:  10,
-		Payload:   `{"fields":{"PHONE":"79001234567","UF_CRM_1734523005552":"МТС"}}`,
-	})
+	err := svc.sendToSkorozvon(context.Background(), entity.LeadForSkorozvon{
+		ID: 9, UUID: "lead-9", Phone: "79001234567", ChildSourceID: &child,
+	}, false)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if api.n != 1 {
+		t.Fatalf("calls=%d", api.n)
+	}
+	if len(leads.dispatches) != 1 || leads.dispatches[0].SentOK {
+		t.Fatalf("dispatch %+v", leads.dispatches)
+	}
+	if leads.dispatches[0].HTTPStatus == nil || *leads.dispatches[0].HTTPStatus != 422 {
+		t.Fatalf("status %+v", leads.dispatches[0].HTTPStatus)
+	}
+}
+
+func TestProcessSkorozvon422CompletesOutbox(t *testing.T) {
+	box := &stubOutboxSkorozvon{items: []entity.OutboxSkorozvon{
+		{UUID: "task-1", LeadUUID: "lead-aaa"},
+	}}
+	leads := &stubLeads{byUUID: entity.LeadDetail{ID: 7, UUID: "lead-aaa", Phone: "79001234567"}}
+	api := &stubSkorozvonSend{statuses: []int{422}}
+	svc := NewWorkerService(&stubOutbox{}, nil, nil, leads, nil, nil, nil, 1).
+		WithOutboxSkorozvon(box).
+		WithSkorozvon(&stubRouteLinks{items: []entity.SkorozvonLink{
+			{ID: 1, Name: "Тест", Type: "uniq", ProjectID: 9},
+		}}, api)
+
+	n, err := svc.ProcessSkorozvon(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if api.n != 1 {
+		t.Fatalf("calls=%d", api.n)
+	}
+	if len(box.completed) != 1 {
+		t.Fatalf("completed %v retries %+v", box.completed, box.retries)
+	}
+}
+
+func TestSendToSkorozvon429RetriesThenWritesFailedDispatch(t *testing.T) {
+	child := 20
+	leads := &stubLeads{}
+	api := &stubSkorozvonSend{statuses: []int{429, 429, 429, 429}}
+	svc := NewWorkerService(
+		&stubOutbox{},
+		nil,
+		nil,
+		leads,
+		nil,
+		nil,
+		nil,
+		1,
+	).WithSkorozvon(&stubRouteLinks{items: []entity.SkorozvonLink{
+		{ID: 1, Name: "Тест", Type: "unique", ProjectID: 9},
+	}}, api)
+	svc.skorozvonWaits = []time.Duration{time.Nanosecond, time.Nanosecond, time.Nanosecond}
+
+	err := svc.sendToSkorozvon(context.Background(), entity.LeadForSkorozvon{
+		ID: 9, UUID: "lead-9", Phone: "79001234567", ChildSourceID: &child,
+	}, false)
+	if err == nil {
+		t.Fatal("expected send error")
 	}
 	if api.n != 4 {
 		t.Fatalf("calls=%d", api.n)
@@ -1117,5 +1690,22 @@ func TestHandleSkorozvon429RetriesThenWritesFailedDispatch(t *testing.T) {
 	}
 	if len(leads.skorozvonBinds) != 0 {
 		t.Fatalf("binds %+v", leads.skorozvonBinds)
+	}
+}
+
+func TestBitrixCallURLProxy(t *testing.T) {
+	const id = "9822217c-e2ff-4aa4-b16b-005db28a876c"
+	s := (&WorkerService{}).WithRecordingLink("https://cdp-dmp.ru", "sek")
+	got := s.bitrixCallURL(entity.LeadDetail{UUID: id, CallID: "51639650467"})
+	want := recordinglink.URL("https://cdp-dmp.ru", "sek", id)
+	if got != want {
+		t.Fatalf("got %q", got)
+	}
+	if s.bitrixCallURL(entity.LeadDetail{UUID: id, CallID: "call-abc"}) != "" {
+		t.Fatal("crmcalls without url")
+	}
+	plain := &WorkerService{}
+	if plain.bitrixCallURL(entity.LeadDetail{UUID: id, CallID: "1"}) != "" {
+		t.Fatal("no secret")
 	}
 }

@@ -19,9 +19,16 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-func DSN(host, port, user, password, dbname string) string {
+func DSN(host, port, user, password, dbname string, maxConns int) string {
+	if maxConns < 1 {
+		maxConns = 32
+	}
+	minConns := 4
+	if maxConns < minConns {
+		minConns = maxConns
+	}
 	return fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable TimeZone=Europe/Moscow",
-		host, port, user, password, dbname,
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable TimeZone=Europe/Moscow pool_max_conns=%d pool_min_conns=%d",
+		host, port, user, password, dbname, maxConns, minConns,
 	)
 }

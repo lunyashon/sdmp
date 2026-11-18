@@ -3,7 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <title>Архив строчек DMP</title>
-<link rel="stylesheet" href="assets/css/style.css?v=14">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="assets/css/style.css?v=22">
+<script src="/assets/js/auth.js?v=2"></script>
 </head>
 <body>
 <div class="wrap">
@@ -12,7 +16,7 @@
     <h1>Архив строчек DMP</h1>
     <nav class="app-nav" aria-label="Разделы">
       <a class="app-nav-item active" href="/list/">Архив</a>
-      <a class="app-nav-item" href="/settings/">Настройки</a>
+      <a class="app-nav-item" href="/settings/guide/sources">Настройки</a>
     </nav>
   </div>
 
@@ -54,12 +58,25 @@
           </div>
         </div>
       </div>
-      <button class="btn" onclick="exportData('selected')">Экспортировать выбранные</button>
-      <button class="btn btn-primary" onclick="exportData('all')">Экспортировать по фильтру</button>
+      <div class="action-menu-wrap" id="action-menu-wrap">
+        <button class="btn btn-primary" type="button" onclick="toggleActionMenu(event)">Действие</button>
+        <div class="action-menu" id="action-menu">
+          <button type="button" onclick="runAction('export-selected')">Экспорт выбранного</button>
+          <button type="button" onclick="runAction('export-filter')">Экспорт по фильтру</button>
+          <div class="action-menu-sep"></div>
+          <button type="button" onclick="runAction('resend-sk')">Переотправить в скорозвон</button>
+          <div class="action-menu-sep"></div>
+          <button type="button" onclick="runAction('import')">Импорт</button>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="table-scroll">
+  <div class="table-scroll is-loading" id="table-scroll">
+  <div id="table-loading" class="table-loading">
+    <span class="page-spinner" aria-hidden="true"></span>
+    Загрузка…
+  </div>
   <table>
     <colgroup id="table-cols"></colgroup>
     <thead>
@@ -127,8 +144,78 @@
     </div>
   </div>
 
+  <div class="overlay" id="import-overlay" onclick="if(event.target===this) closeImport()">
+    <div class="card import-card">
+      <div class="card-head">
+        <div>
+          <p class="card-title">Импорт строк</p>
+          <p class="card-sub" id="import-sub">xlsx или csv. Сейчас только маппинг колонок, в архив не пишем.</p>
+        </div>
+        <button class="card-close" type="button" onclick="closeImport()">&times;</button>
+      </div>
+      <div class="card-body">
+        <input type="file" id="import-file" accept=".xlsx,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden onchange="uploadImportFile(this.files && this.files[0])">
+        <div id="import-drop" class="import-drop" onclick="document.getElementById('import-file').click()" ondragover="event.preventDefault(); this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="event.preventDefault(); this.classList.remove('drag'); uploadImportFile(event.dataTransfer.files[0])">
+          Перетащите файл сюда или нажмите, чтобы выбрать
+          <span>XLSX / CSV</span>
+        </div>
+        <div id="import-error" class="import-error" hidden></div>
+        <div id="import-loading" class="import-loading" hidden>
+          <span class="page-spinner" aria-hidden="true"></span>
+          Читаем файл…
+        </div>
+        <div id="import-map-wrap" hidden>
+          <div class="card-section">
+            <h3>Маппинг колонок</h3>
+            <p class="import-hint">Колонка в файле → поле lead_row</p>
+            <div class="import-map" id="import-map"></div>
+          </div>
+          <div class="card-section">
+            <h3>Как это ляжет в систему</h3>
+            <p class="import-hint" id="import-preview-hint"></p>
+            <div class="import-preview-scroll">
+              <table class="import-preview-table" id="import-preview-table"></table>
+            </div>
+          </div>
+        </div>
+        <div id="import-project-wrap" hidden>
+          <div class="card-section">
+            <h3>Источник</h3>
+            <p class="import-hint">Обязательно. Подисточник и проект Скорозвона назначатся по стандартным связкам.</p>
+            <label class="import-select-label">Источник</label>
+            <div class="ms" id="import-source">
+              <button type="button" class="ms-trigger" onclick="toggleImportSourceMs(event)"><span class="ms-label">Выберите источник</span></button>
+              <span class="ms-caret">▾</span>
+              <div class="ms-drop" onclick="event.stopPropagation()">
+                <input type="text" class="ms-search" placeholder="Поиск..." oninput="filterImportSourceMs(this.value)">
+                <div class="ms-opts" id="import-source-opts"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="import-upload-wrap" hidden>
+          <div class="card-section">
+            <h3>Загрузка в очередь</h3>
+            <p class="import-hint" id="import-upload-hint">Пишем lead_row и outbox пачками по 500. Дальше — обычный пайплайн воркера.</p>
+            <div class="import-progress">
+              <div class="import-progress-track"><i id="import-progress-fill"></i></div>
+              <div id="import-progress-text">0 / 0</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="import-foot" id="import-foot" hidden>
+        <button class="btn" type="button" id="import-back" hidden onclick="importBack()">Назад</button>
+        <div class="import-foot-right">
+          <span class="import-step-label">Шаг <span id="import-step-n">1</span>/3</span>
+          <button class="btn btn-primary" type="button" id="import-next" onclick="importNext()">Далее</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
-<script src="assets/js/script.js?v=36"></script>
+<script src="assets/js/script.js?v=53"></script>
 </body>
 </html>

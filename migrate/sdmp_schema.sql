@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS "lead_row" (
 	"call_form" VARCHAR,
 	-- актуальная анкета Скорозвона (skorozvon_anketa.id). История в таблице. Nullable
 	"skorozvon_anketa_id" BIGINT,
-	-- 1=принята 2=обогащена 3=в СК 4=из СК 5=в Б24 6=отклонена 7=ожидание
+	-- 1=принята 2=обогащена 3=в СК 4=из звонилки 5=в Б24 6=отклонена 7=ожидание
 	"status_id" SMALLINT NOT NULL,
 	-- ключ объекта в S3. NULL у мигрированных исторических строк до выгрузки в S3
 	"s3_key" VARCHAR,
@@ -89,7 +89,7 @@ COMMENT ON COLUMN "lead_row"."project_num" IS 'id проекта Скорозв�
 COMMENT ON COLUMN "lead_row"."skorozvon_lead_id" IS 'id лида в Скорозвоне после успешной отправки. Ищем call_result по нему. Nullable';
 COMMENT ON COLUMN "lead_row"."call_form" IS 'jsonb: ответы анкеты оператора. Ключи: imya summa_dolga vid_dolga dohod zalog imuschestvo bankrotstvo gorod. Nullable. Легаси, новые анкеты в skorozvon_anketa';
 COMMENT ON COLUMN "lead_row"."skorozvon_anketa_id" IS 'актуальная анкета Скорозвона. История в skorozvon_anketa. Nullable';
-COMMENT ON COLUMN "lead_row"."status_id" IS '1=принята 2=обогащена 3=в СК 4=из СК 5=в Б24 6=отклонена 7=ожидание';
+COMMENT ON COLUMN "lead_row"."status_id" IS '1=принята 2=обогащена 3=в СК 4=из звонилки 5=в Б24 6=отклонена 7=ожидание';
 COMMENT ON COLUMN "lead_row"."s3_key" IS 'ключ объекта в S3: raw/{source_id}/{year}/{month}/{uuid}.json. NULL у мигрированных исторических строк до выгрузки в S3';
 COMMENT ON COLUMN "lead_row"."archived_at" IS 'дата архивации. NULL = активная строка. NOT NULL = в архиве S3';
 COMMENT ON COLUMN "lead_row"."created_at" IS 'время приёма. Пишет API';
@@ -121,13 +121,15 @@ CREATE TABLE IF NOT EXISTS "skorozvon_anketa_fields" (
 	"skorozvon_lead_id" VARCHAR NOT NULL,
 	"field_id" BIGINT NOT NULL,
 	"enum_id" BIGINT NOT NULL,
+	"value_text" VARCHAR,
 	"created_at" TIMESTAMP NOT NULL DEFAULT now(),
 	PRIMARY KEY("id")
 );
 
-COMMENT ON TABLE "skorozvon_anketa_fields" IS 'custom_fields карточки СК с call_result/form_response. Снимок: field_id + enum_id (option id). Подписи потом из skorozvon_maps';
+COMMENT ON TABLE "skorozvon_anketa_fields" IS 'custom_fields карточки СК с call_result/form_response. Снимок: field_id + enum_id (option id) или value_text для ФИО';
 COMMENT ON COLUMN "skorozvon_anketa_fields"."field_id" IS 'id поля СК, в webhook ключ FIELD_{field_id}';
-COMMENT ON COLUMN "skorozvon_anketa_fields"."enum_id" IS 'id опции select/multiselect (skorozvon_maps.option_id)';
+COMMENT ON COLUMN "skorozvon_anketa_fields"."enum_id" IS 'id опции select/multiselect (skorozvon_maps.option_id); 0 если текст';
+COMMENT ON COLUMN "skorozvon_anketa_fields"."value_text" IS 'текст custom_field СК, если это не select (ФИО из lead.name как FIELD_50000007333)';
 
 CREATE INDEX IF NOT EXISTS skorozvon_anketa_fields_lead_idx
 	ON skorozvon_anketa_fields (lead_row_id);
@@ -234,15 +236,40 @@ CREATE INDEX IF NOT EXISTS outbox_locked_until_idx ON outbox (locked_until) WHER
 CREATE TABLE IF NOT EXISTS "outbox_bx24" (
 	"uuid" VARCHAR PRIMARY KEY,
 	"uuid_lead" VARCHAR NOT NULL,
-	"locked_until" TIMESTAMPTZ
+	"locked_until" TIMESTAMPTZ,
+	"count_retry" SMALLINT NOT NULL DEFAULT 0,
+	"last_retry" TIMESTAMPTZ
 );
 
 COMMENT ON TABLE "outbox_bx24" IS 'очередь отправки в Б24. Пишем в той же TX, что status_id=4. Claim позже, как outbox';
 COMMENT ON COLUMN "outbox_bx24"."uuid" IS 'id задачи в очереди';
 COMMENT ON COLUMN "outbox_bx24"."uuid_lead" IS 'lead_row.uuid';
 COMMENT ON COLUMN "outbox_bx24"."locked_until" IS 'пока > now() строка занята воркером; NULL или прошлое = можно брать';
+COMMENT ON COLUMN "outbox_bx24"."count_retry" IS 'сколько раз уже пробовали отправить';
+COMMENT ON COLUMN "outbox_bx24"."last_retry" IS 'когда последний раз пробовали отправить';
 
 CREATE UNIQUE INDEX IF NOT EXISTS outbox_bx24_uuid_lead_uidx ON outbox_bx24 (uuid_lead);
+CREATE INDEX IF NOT EXISTS outbox_bx24_claim_idx ON outbox_bx24 (uuid)
+	WHERE count_retry < 6;
+
+CREATE TABLE IF NOT EXISTS "outbox_skorozvon" (
+	"uuid" VARCHAR PRIMARY KEY,
+	"uuid_lead" VARCHAR NOT NULL,
+	"locked_until" TIMESTAMPTZ,
+	"count_retry" SMALLINT NOT NULL DEFAULT 0,
+	"last_retry" TIMESTAMPTZ
+);
+
+COMMENT ON TABLE "outbox_skorozvon" IS 'очередь отправки в Скорозвон. Пишем после обогащения. Claim отдельной горутиной';
+COMMENT ON COLUMN "outbox_skorozvon"."uuid" IS 'id задачи в очереди';
+COMMENT ON COLUMN "outbox_skorozvon"."uuid_lead" IS 'lead_row.uuid';
+COMMENT ON COLUMN "outbox_skorozvon"."locked_until" IS 'пока > now() строка занята воркером; NULL или прошлое = можно брать';
+COMMENT ON COLUMN "outbox_skorozvon"."count_retry" IS 'сколько раз уже пробовали отправить';
+COMMENT ON COLUMN "outbox_skorozvon"."last_retry" IS 'когда последний раз пробовали отправить';
+
+CREATE UNIQUE INDEX IF NOT EXISTS outbox_skorozvon_uuid_lead_uidx ON outbox_skorozvon (uuid_lead);
+CREATE INDEX IF NOT EXISTS outbox_skorozvon_claim_idx ON outbox_skorozvon (uuid)
+	WHERE count_retry < 6;
 
 CREATE TABLE IF NOT EXISTS "source" (
 	"id" INT GENERATED BY DEFAULT AS IDENTITY,
@@ -356,7 +383,7 @@ CREATE TABLE IF NOT EXISTS "status" (
 	PRIMARY KEY("id")
 );
 
-COMMENT ON TABLE "status" IS '1=принята 2=обогащена 3=в СК 4=из СК 5=в Б24 6=отклонена 7=ожидание';
+COMMENT ON TABLE "status" IS '1=принята 2=обогащена 3=в СК 4=из звонилки 5=в Б24 6=отклонена 7=ожидание';
 
 CREATE TABLE IF NOT EXISTS "channel" (
 	"id" SMALLINT,
@@ -372,7 +399,7 @@ CREATE TABLE IF NOT EXISTS "event_type" (
 	PRIMARY KEY("id")
 );
 
-COMMENT ON TABLE "event_type" IS '1=принята 2=обогащена 3=в СК 4=из СК 5=партнёру 6=в Б24 7=отклонена 8=архивирована';
+COMMENT ON TABLE "event_type" IS '1=принята 2=обогащена 3=в СК 4=из звонилки 5=партнёру 6=в Б24 7=отклонена 8=архивирована';
 
 CREATE TABLE IF NOT EXISTS "dedup_provider" (
 	"id" INT GENERATED BY DEFAULT AS IDENTITY,
@@ -468,7 +495,7 @@ INSERT INTO "status" ("id", "name") VALUES
 	(1, 'принята'),
 	(2, 'обогащена'),
 	(3, 'в СК'),
-	(4, 'из СК'),
+	(4, 'из звонилки'),
 	(5, 'в Б24'),
 	(6, 'отклонена'),
 	(7, 'ожидание')
@@ -477,14 +504,15 @@ ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "channel" ("id", "name") VALUES
 	(1, 'Скорозвон'),
 	(2, 'вебхук-партнёр'),
-	(3, 'Битрикс')
+	(3, 'Битрикс'),
+	(4, 'Google Sheets')
 ON CONFLICT ("id") DO NOTHING;
 
 INSERT INTO "event_type" ("id", "name") VALUES
 	(1, 'принята'),
 	(2, 'обогащена'),
 	(3, 'в СК'),
-	(4, 'из СК'),
+	(4, 'из звонилки'),
 	(5, 'партнёру'),
 	(6, 'в Б24'),
 	(7, 'отклонена'),

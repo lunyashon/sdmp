@@ -26,6 +26,9 @@ services:
     environment:
       TZ: Europe/Moscow
     network_mode: host
+    extra_hosts:
+      - "bfl-activity.ru:46.254.20.220"
+      - "crm-zennit.ru:95.163.86.21"
     volumes:
       - ./config/.env:/app/config/.env
       - ./logs:/app/logs

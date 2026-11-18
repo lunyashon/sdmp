@@ -1,7 +1,10 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +18,7 @@ import (
 	"github.com/lunyashon/sdmp/internal/adapter/http/handler"
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
+	"github.com/lunyashon/sdmp/internal/lib/recordinglink"
 	"github.com/lunyashon/sdmp/internal/usecase"
 )
 
@@ -30,19 +34,68 @@ func (s *stubReceiver) Receive(_ context.Context, in usecase.ReceiveLeadInput) (
 }
 
 type stubLeadFilter struct {
-	q       usecase.LeadFilterQuery
-	columns []string
-	res     usecase.LeadFilterResult
-	export  usecase.LeadExportFile
-	detail  entity.LeadDetail
-	raw     usecase.LeadRaw
-	err     error
-	getErr  error
+	q         usecase.LeadFilterQuery
+	columns   []string
+	res       usecase.LeadFilterResult
+	export    usecase.LeadExportFile
+	importP   usecase.LeadImportPreview
+	importN   string
+	importB   []byte
+	importIn  usecase.LeadImportInput
+	importRes usecase.LeadImportResult
+	detail    entity.LeadDetail
+	raw       usecase.LeadRaw
+	rec       usecase.LeadRecording
+	err       error
+	getErr    error
+	skIDs     []int64
+	sk        []entity.LeadSkDispatch
 }
 
 func (s *stubLeadFilter) Filter(_ context.Context, q usecase.LeadFilterQuery) (usecase.LeadFilterResult, error) {
 	s.q = q
 	return s.res, s.err
+}
+
+func (s *stubLeadFilter) ListSkDispatch(_ context.Context, ids []int64) ([]entity.LeadSkDispatch, error) {
+	s.skIDs = ids
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.sk != nil {
+		return s.sk, nil
+	}
+	return []entity.LeadSkDispatch{}, nil
+}
+
+func (s *stubLeadFilter) PreviewImport(filename string, body []byte) (usecase.LeadImportPreview, error) {
+	s.importN = filename
+	s.importB = body
+	if s.err != nil {
+		return usecase.LeadImportPreview{}, s.err
+	}
+	if s.importP.Filename != "" {
+		return s.importP, nil
+	}
+	return usecase.LeadImportPreview{
+		Filename:  filename,
+		RowCount:  1,
+		Columns:   []usecase.LeadImportColumn{{Index: 0, Name: "Телефон", Samples: []string{"79001234567"}}},
+		Rows:      [][]string{{"79001234567"}},
+		Fields:    []usecase.LeadImportField{{ID: "phone", Column: "phone", Label: "Телефон"}},
+		Suggested: map[string]string{"0": "phone"},
+	}, nil
+}
+
+func (s *stubLeadFilter) Import(_ context.Context, in usecase.LeadImportInput) (usecase.LeadImportResult, error) {
+	s.importIn = in
+	if s.err != nil {
+		return usecase.LeadImportResult{}, s.err
+	}
+	if s.importRes.Queued != 0 || s.importRes.Failed != 0 {
+		return s.importRes, nil
+	}
+	return usecase.LeadImportResult{Queued: len(in.Rows)}, nil
 }
 
 func (s *stubLeadFilter) ExportXLSX(_ context.Context, q usecase.LeadFilterQuery, columns []string) (usecase.LeadExportFile, error) {
@@ -95,6 +148,16 @@ func (s *stubLeadFilter) SkorozvonBitrixStats(context.Context, string, string) (
 	}}, nil
 }
 
+func (s *stubLeadFilter) OutgoingStats(context.Context, string, string) (entity.LeadOutgoingStats, error) {
+	if s.err != nil {
+		return entity.LeadOutgoingStats{}, s.err
+	}
+	return entity.LeadOutgoingStats{
+		Partners:  []entity.LeadPartnerDispatchCount{{PartnerID: 3, Count: 18}},
+		Skorozvon: []entity.LeadSkorozvonDispatchCount{{ProjectID: "50000191177", Count: 9}},
+	}, nil
+}
+
 func (s *stubLeadFilter) Get(_ context.Context, id int64) (entity.LeadDetail, error) {
 	if s.getErr != nil {
 		return entity.LeadDetail{}, s.getErr
@@ -132,6 +195,14 @@ func (s *stubLeadFilter) ResendPartner(_ context.Context, _ int64, _ string, par
 	}, nil
 }
 
+func (s *stubLeadFilter) ResendSkorozvon(_ context.Context, ids []int64) (usecase.SkorozvonResendResult, error) {
+	s.skIDs = ids
+	if s.err != nil {
+		return usecase.SkorozvonResendResult{}, s.err
+	}
+	return usecase.SkorozvonResendResult{Queued: len(ids), Missing: 0}, nil
+}
+
 func (s *stubLeadFilter) Raw(_ context.Context, _ int64, _ string) (usecase.LeadRaw, error) {
 	if s.getErr != nil {
 		return usecase.LeadRaw{}, s.getErr
@@ -140,6 +211,16 @@ func (s *stubLeadFilter) Raw(_ context.Context, _ int64, _ string) (usecase.Lead
 		return usecase.LeadRaw{}, domain.ErrNotFound
 	}
 	return s.raw, nil
+}
+
+func (s *stubLeadFilter) Recording(_ context.Context, _ int64, _ string) (usecase.LeadRecording, error) {
+	if s.getErr != nil {
+		return usecase.LeadRecording{}, s.getErr
+	}
+	if s.rec.Body == nil {
+		return usecase.LeadRecording{}, domain.ErrNotFound
+	}
+	return s.rec, nil
 }
 
 func leadsRouter(svc *stubLeadFilter) http.Handler {
@@ -203,6 +284,57 @@ func TestListLeads(t *testing.T) {
 	}
 }
 
+func TestListLeadsSkSendFilter(t *testing.T) {
+	ok := false
+	status := 429
+	svc := &stubLeadFilter{res: usecase.LeadFilterResult{
+		Total: 1, Limit: 10,
+		Leads: []entity.LeadListItem{{
+			ID: 9, UUID: "u-9", DateCreate: time.Date(2026, 9, 21, 12, 0, 0, 0, time.Local),
+			SkSentOK: &ok, SkHTTPStatus: &status, SkError: "rate limit",
+		}},
+	}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads?date_from=01.08.2026+00:00:00&date_to=30.08.2026+23:59:59&sk_send=error&sk_send=fail", nil)
+	leadsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if len(svc.q.SkSend) != 1 || svc.q.SkSend[0] != "error" {
+		t.Fatalf("query %+v", svc.q.SkSend)
+	}
+	got := decodeData[dto.LeadsResponse](t, w.Body.Bytes())
+	if got.Leads[0].SkSentOK == nil || *got.Leads[0].SkSentOK || got.Leads[0].SkError != "rate limit" {
+		t.Fatalf("%+v", got.Leads[0])
+	}
+	if got.Leads[0].SkHTTPStatus == nil || *got.Leads[0].SkHTTPStatus != 429 {
+		t.Fatalf("%+v", got.Leads[0])
+	}
+}
+
+func TestListSkDispatch(t *testing.T) {
+	status := 200
+	svc := &stubLeadFilter{sk: []entity.LeadSkDispatch{{
+		LeadRowID: 11, SentOK: true, HTTPStatus: &status,
+	}}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/sk-dispatch?ids=11&ids=12&ids=11", nil)
+	leadsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if len(svc.skIDs) != 3 || svc.skIDs[0] != 11 || svc.skIDs[1] != 12 || svc.skIDs[2] != 11 {
+		t.Fatalf("ids %+v", svc.skIDs)
+	}
+	got := decodeData[struct {
+		Count int                     `json:"count"`
+		Items []dto.LeadSkDispatchDTO `json:"items"`
+	}](t, w.Body.Bytes())
+	if got.Count != 1 || got.Items[0].ID != 11 || !got.Items[0].SentOK {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestExportLeadsXLSX(t *testing.T) {
 	svc := &stubLeadFilter{export: usecase.LeadExportFile{
 		Filename:    "leads_2026-09-09.xlsx",
@@ -226,6 +358,68 @@ func TestExportLeadsXLSX(t *testing.T) {
 	}
 	if len(svc.q.IDs) != 2 || svc.q.IDs[0] != 42 || len(svc.columns) != 2 || svc.columns[0] != "uuid" {
 		t.Fatalf("query %+v cols %v", svc.q, svc.columns)
+	}
+}
+
+func TestPreviewImport(t *testing.T) {
+	svc := &stubLeadFilter{}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "leads.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write([]byte("Телефон\n79001234567\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/leads/import/preview", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	leadsRouter(svc).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	got := decodeData[usecase.LeadImportPreview](t, rec.Body.Bytes())
+	if got.Filename != "leads.csv" || got.Suggested["0"] != "phone" {
+		t.Fatalf("%+v", got)
+	}
+	if svc.importN != "leads.csv" || !strings.Contains(string(svc.importB), "79001234567") {
+		t.Fatalf("svc %q %q", svc.importN, svc.importB)
+	}
+}
+
+func TestPreviewImportRequiresFile(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/leads/import/preview", nil)
+	leadsRouter(&stubLeadFilter{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestImportLeads(t *testing.T) {
+	svc := &stubLeadFilter{}
+	body, err := json.Marshal(dto.LeadImportRequest{
+		SourceID: 10,
+		Mapping:  map[string]string{"0": "phone"},
+		Rows:     [][]string{{"79001234567"}, {"79007654321"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/leads/import", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	leadsRouter(svc).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	got := decodeData[usecase.LeadImportResult](t, rec.Body.Bytes())
+	if got.Queued != 2 || len(svc.importIn.Rows) != 2 || svc.importIn.SourceID != 10 {
+		t.Fatalf("%+v in %+v", got, svc.importIn)
 	}
 }
 
@@ -276,8 +470,39 @@ func TestGetLead(t *testing.T) {
 	if len(got.Lead.Events) != 1 || got.Lead.Events[0].Type != "принята" {
 		t.Fatalf("events %+v", got.Lead.Events)
 	}
+	if got.Lead.Queues == nil {
+		t.Fatalf("queues nil")
+	}
 	if got.Lead.SkorozvonAnketaFields == nil {
 		t.Fatalf("anketa fields nil")
+	}
+}
+
+func TestGetLeadQueues(t *testing.T) {
+	svc := &stubLeadFilter{detail: entity.LeadDetail{
+		ID:    42,
+		UUID:  "3ad82cac-e095-4f19-8bd3-c055ed52ff80",
+		Phone: "79869527036",
+		Queues: []entity.LeadOutboxQueue{
+			{UUID: "outbox-sk-1", ChannelID: 1, Channel: "Скорозвон", CountRetry: 2},
+			{UUID: "outbox-bx-1", ChannelID: 3, Channel: "Битрикс"},
+		},
+	}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/42", nil)
+	leadsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	got := decodeData[dto.LeadDetailResponse](t, w.Body.Bytes())
+	if len(got.Lead.Queues) != 2 {
+		t.Fatalf("queues %+v", got.Lead.Queues)
+	}
+	if got.Lead.Queues[0].UUID != "outbox-sk-1" || got.Lead.Queues[0].Channel != "Скорозвон" || got.Lead.Queues[0].Status != "в очереди на отправку" || got.Lead.Queues[0].CountRetry != 2 {
+		t.Fatalf("sk %+v", got.Lead.Queues[0])
+	}
+	if got.Lead.Queues[1].UUID != "outbox-bx-1" || got.Lead.Queues[1].Channel != "Битрикс" || got.Lead.Queues[1].Status != "в очереди на отправку" {
+		t.Fatalf("bx %+v", got.Lead.Queues[1])
 	}
 }
 
@@ -401,6 +626,22 @@ func TestSkorozvonBitrixStats(t *testing.T) {
 	}
 }
 
+func TestOutgoingStats(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/outgoing-stats?date_from=2026-08-14&date_to=2026-08-20", nil)
+	leadsRouter(&stubLeadFilter{}).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	got := decodeData[entity.LeadOutgoingStats](t, w.Body.Bytes())
+	if len(got.Partners) != 1 || got.Partners[0].PartnerID != 3 || got.Partners[0].Count != 18 {
+		t.Fatalf("%+v", got)
+	}
+	if len(got.Skorozvon) != 1 || got.Skorozvon[0].ProjectID != "50000191177" || got.Skorozvon[0].Count != 9 {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestGetLeadRaw(t *testing.T) {
 	svc := &stubLeadFilter{raw: usecase.LeadRaw{
 		Filename:    "9822217c-e2ff-4aa4-b16b-005db28a876c.json",
@@ -421,6 +662,63 @@ func TestGetLeadRaw(t *testing.T) {
 	}
 	if w.Body.String() != `{"phone":"79001234567"}` {
 		t.Fatalf("body %s", w.Body.String())
+	}
+}
+
+func TestGetLeadRecording(t *testing.T) {
+	svc := &stubLeadFilter{rec: usecase.LeadRecording{
+		Filename:    "51616666186.mp3",
+		ContentType: "audio/mpeg",
+		Body:        []byte("ID3"),
+	}}
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/42/recording", nil)
+	leadsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Header().Get("Content-Type"), "audio/mpeg") {
+		t.Fatalf("content-type %q", w.Header().Get("Content-Type"))
+	}
+	if w.Body.String() != "ID3" {
+		t.Fatalf("body %s", w.Body.String())
+	}
+}
+
+func TestPublicRecordingSigned(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &stubLeadFilter{rec: usecase.LeadRecording{
+		Filename:    "call.mp3",
+		ContentType: "audio/mpeg",
+		Body:        []byte("ID3"),
+	}}
+	h := handler.NewLeadsHandler(svc, nil).WithRecordingSecret("sek")
+	r := gin.New()
+	r.GET("/rest/recordings/:ref", h.PublicRecording)
+	id := "9822217c-e2ff-4aa4-b16b-005db28a876c"
+	sig := recordinglink.Sign("sek", id)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/recordings/"+id+".mp3?sig="+sig, nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || w.Body.String() != "ID3" {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/rest/recordings/"+id+".mp3?sig=bad", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("bad sig status %d", w.Code)
+	}
+}
+
+func TestGetLeadRecordingNotFound(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rest/leads/9/recording", nil)
+	leadsRouter(&stubLeadFilter{}).ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
 }
 
@@ -449,6 +747,32 @@ func TestResendPartner(t *testing.T) {
 func TestResendPartnerBadPartnerID(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/rest/leads/42/partners/0/resend", nil)
+	leadsRouter(&stubLeadFilter{}).ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+func TestResendSkorozvon(t *testing.T) {
+	svc := &stubLeadFilter{}
+	body, _ := json.Marshal(dto.SkorozvonResendRequest{IDs: []int64{11, 12}})
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/leads/skorozvon/resend", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	leadsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	got := decodeData[usecase.SkorozvonResendResult](t, w.Body.Bytes())
+	if got.Queued != 2 || len(svc.skIDs) != 2 || svc.skIDs[0] != 11 {
+		t.Fatalf("%+v ids %+v", got, svc.skIDs)
+	}
+}
+
+func TestResendSkorozvonBadJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/leads/skorozvon/resend", strings.NewReader("{"))
+	req.Header.Set("Content-Type", "application/json")
 	leadsRouter(&stubLeadFilter{}).ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())

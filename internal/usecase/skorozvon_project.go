@@ -9,6 +9,7 @@ import (
 
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
+	"github.com/lunyashon/sdmp/internal/lib/clock"
 	"github.com/lunyashon/sdmp/internal/lib/id"
 	"github.com/lunyashon/sdmp/internal/port"
 )
@@ -31,43 +32,55 @@ func NewSkorozvonProjectService(repo port.SkorozvonProjectRepository, api port.S
 
 const skorozvonTestPhone = "79800010203"
 
-type SkorozvonProjectInput struct {
-	Name      string
-	ProjectID int64
-}
+const SkorozvonProjectListLimit = 5
 
 func (s *SkorozvonProjectService) List(ctx context.Context) ([]entity.SkorozvonProject, error) {
 	return s.repo.List(ctx)
 }
 
-func (s *SkorozvonProjectService) Create(ctx context.Context, in SkorozvonProjectInput) (entity.SkorozvonProject, error) {
-	name := strings.TrimSpace(in.Name)
-	if name == "" {
-		return entity.SkorozvonProject{}, fmt.Errorf("%w: name is required", domain.ErrInvalidInput)
+func (s *SkorozvonProjectService) ListPage(ctx context.Context, offset int, name string) ([]entity.SkorozvonProject, int, error) {
+	if offset < 0 {
+		return nil, 0, fmt.Errorf("%w: offset must be >= 0", domain.ErrInvalidInput)
 	}
-	if in.ProjectID <= 0 {
-		return entity.SkorozvonProject{}, fmt.Errorf("%w: project_id is required", domain.ErrInvalidInput)
-	}
+	return s.repo.ListPage(ctx, offset, strings.TrimSpace(name))
+}
 
-	uid, err := s.uuid()
+func (s *SkorozvonProjectService) Sync(ctx context.Context) ([]entity.SkorozvonProject, error) {
+	if s.api == nil {
+		return nil, fmt.Errorf("skorozvon api is not configured")
+	}
+	remote, err := s.api.ListCallProjects(ctx)
 	if err != nil {
-		return entity.SkorozvonProject{}, fmt.Errorf("uuid: %w", err)
+		return nil, err
 	}
 
 	now := s.now()
-	ok := s.check(ctx, in.ProjectID)
-	return s.repo.Create(ctx, entity.SkorozvonProject{
-		UUID:            uid,
-		ProjectID:       in.ProjectID,
-		Name:            name,
-		CreatedAt:       now,
-		LastDateRequest: &now,
-		LastRequest:     &ok,
-	})
+	for _, item := range remote {
+		if item.ID <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(item.Title)
+		if name == "" {
+			name = fmt.Sprintf("PROJECT_%d", item.ID)
+		}
+		uid, err := s.uuid()
+		if err != nil {
+			return nil, fmt.Errorf("uuid: %w", err)
+		}
+		if _, _, err := s.repo.CreateIfAbsent(ctx, entity.SkorozvonProject{
+			UUID:      uid,
+			ProjectID: item.ID,
+			Name:      name,
+			CreatedAt: now,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return s.repo.List(ctx)
 }
 
-func (s *SkorozvonProjectService) Refresh(ctx context.Context) ([]entity.SkorozvonProject, error) {
-	items, err := s.repo.List(ctx)
+func (s *SkorozvonProjectService) Refresh(ctx context.Context, uuids []string) ([]entity.SkorozvonProject, error) {
+	items, err := s.refreshTargets(ctx, uuids)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +119,30 @@ func (s *SkorozvonProjectService) Refresh(ctx context.Context) ([]entity.Skorozv
 	return out, nil
 }
 
+func (s *SkorozvonProjectService) refreshTargets(ctx context.Context, uuids []string) ([]entity.SkorozvonProject, error) {
+	if len(uuids) == 0 {
+		return s.repo.List(ctx)
+	}
+	out := make([]entity.SkorozvonProject, 0, len(uuids))
+	seen := map[string]struct{}{}
+	for _, raw := range uuids {
+		uuid := strings.TrimSpace(raw)
+		if uuid == "" {
+			continue
+		}
+		if _, ok := seen[uuid]; ok {
+			continue
+		}
+		seen[uuid] = struct{}{}
+		p, err := s.repo.Get(ctx, uuid)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 func (s *SkorozvonProjectService) SendTest(ctx context.Context, uuid string) (int, error) {
 	uuid = strings.TrimSpace(uuid)
 	if uuid == "" {
@@ -133,4 +170,53 @@ func (s *SkorozvonProjectService) check(ctx context.Context, projectID int64) bo
 		return false
 	}
 	return s.api.CheckProject(ctx, projectID)
+}
+
+var skorozvonProjectHours = []int{12, 17}
+
+func (s *WorkerService) WithSkorozvonProjects(projects *SkorozvonProjectService) *WorkerService {
+	s.projects = projects
+	return s
+}
+
+func (s *WorkerService) loopSkorozvonProjects(ctx context.Context) {
+	if err := s.SyncSkorozvonProjects(ctx); err != nil {
+		s.log.ErrorContext(ctx, "skorozvon projects sync failed", "error", err)
+	}
+	for {
+		waitFor := time.Until(nextSkorozvonProjectsAt(clock.Now()))
+		if waitFor < 0 {
+			waitFor = 0
+		}
+		if err := wait(ctx, waitFor); err != nil {
+			return
+		}
+		if err := s.SyncSkorozvonProjects(ctx); err != nil {
+			s.log.ErrorContext(ctx, "skorozvon projects sync failed", "error", err)
+		}
+	}
+}
+
+func (s *WorkerService) SyncSkorozvonProjects(ctx context.Context) error {
+	if s.projects == nil {
+		return nil
+	}
+	items, err := s.projects.Sync(ctx)
+	if err != nil {
+		return err
+	}
+	s.log.InfoContext(ctx, "skorozvon projects synced", "projects", len(items))
+	return nil
+}
+
+func nextSkorozvonProjectsAt(now time.Time) time.Time {
+	now = now.In(clock.Location)
+	for _, hour := range skorozvonProjectHours {
+		at := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, clock.Location)
+		if at.After(now) {
+			return at
+		}
+	}
+	next := now.AddDate(0, 0, 1)
+	return time.Date(next.Year(), next.Month(), next.Day(), skorozvonProjectHours[0], 0, 0, 0, clock.Location)
 }

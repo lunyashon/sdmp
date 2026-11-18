@@ -27,19 +27,35 @@ type BitrixErrorBody struct {
 }
 
 func BitrixResult(c *gin.Context, start time.Time, id int64) {
+	BitrixData(c, start, id)
+}
+
+func BitrixData(c *gin.Context, start time.Time, result any) {
+	c.JSON(http.StatusOK, gin.H{
+		"result": result,
+		"time":   bitrixTime(start),
+	})
+}
+
+func BitrixList(c *gin.Context, start time.Time, result any, total int) {
+	c.JSON(http.StatusOK, gin.H{
+		"result": result,
+		"total":  total,
+		"time":   bitrixTime(start),
+	})
+}
+
+func bitrixTime(start time.Time) BitrixTime {
 	finish := time.Now()
 	duration := finish.Sub(start).Seconds()
-	c.JSON(http.StatusOK, BitrixOK{
-		Result: id,
-		Time: BitrixTime{
-			Start:      unixFloat(start),
-			Finish:     unixFloat(finish),
-			Duration:   duration,
-			Processing: duration,
-			DateStart:  start.Format(time.RFC3339),
-			DateFinish: finish.Format(time.RFC3339),
-		},
-	})
+	return BitrixTime{
+		Start:      unixFloat(start),
+		Finish:     unixFloat(finish),
+		Duration:   duration,
+		Processing: duration,
+		DateStart:  start.Format(time.RFC3339),
+		DateFinish: finish.Format(time.RFC3339),
+	}
 }
 
 func BitrixError(c *gin.Context, status int, code, description string) {

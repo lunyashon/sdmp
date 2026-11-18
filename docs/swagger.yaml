@@ -11,6 +11,18 @@ definitions:
       name:
         type: string
     type: object
+  dto.CreateSourceRequest:
+    properties:
+      base_label:
+        type: string
+      bitrix_code:
+        type: string
+      cold_label:
+        type: string
+      name:
+        example: Новый источник
+        type: string
+    type: object
   dto.CreateTokenResponse:
     properties:
       source_id:
@@ -442,13 +454,19 @@ definitions:
         items:
           $ref: '#/definitions/entity.SkorozvonProject'
         type: array
-    type: object
-  dto.SkorozvonProjectRequest:
-    properties:
-      name:
-        type: string
-      project_id:
+      limit:
         type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
+  dto.SkorozvonProjectRefreshRequest:
+    properties:
+      uuids:
+        items:
+          type: string
+        type: array
     type: object
   dto.SourceDTO:
     properties:
@@ -512,6 +530,24 @@ definitions:
       unknown:
         type: integer
     type: object
+  entity.LeadOutgoingStats:
+    properties:
+      partners:
+        items:
+          $ref: '#/definitions/entity.LeadPartnerDispatchCount'
+        type: array
+      skorozvon:
+        items:
+          $ref: '#/definitions/entity.LeadSkorozvonDispatchCount'
+        type: array
+    type: object
+  entity.LeadPartnerDispatchCount:
+    properties:
+      count:
+        type: integer
+      partner_id:
+        type: integer
+    type: object
   entity.LeadSkorozvonBitrixStat:
     properties:
       created:
@@ -524,6 +560,13 @@ definitions:
         type: integer
       updated_sent:
         type: integer
+    type: object
+  entity.LeadSkorozvonDispatchCount:
+    properties:
+      count:
+        type: integer
+      project_id:
+        type: string
     type: object
   entity.LeadSourceCount:
     properties:
@@ -732,6 +775,22 @@ paths:
       summary: Health
       tags:
       - health
+  /rest/docs/crm.lead.add.docx:
+    get:
+      produces:
+      - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Документация crm.lead.add
+      tags:
+      - docs
   /rest/leads:
     get:
       parameters:
@@ -814,6 +873,13 @@ paths:
         in: query
         name: via_us
         type: boolean
+      - collectionFormat: multi
+        description: lead_row.id
+        in: query
+        items:
+          type: integer
+        name: ids
+        type: array
       - default: 10
         description: Лимит
         in: query
@@ -1136,6 +1202,42 @@ paths:
           schema:
             $ref: '#/definitions/response.ErrorEnvelope'
       summary: Входящий трафик по источникам
+      tags:
+      - leads
+  /rest/leads/outgoing-stats:
+    get:
+      parameters:
+      - description: Дата с
+        in: query
+        name: date_from
+        required: true
+        type: string
+      - description: Дата по
+        in: query
+        name: date_to
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.LeadOutgoingStats'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Исходящий трафик из dispatch
       tags:
       - leads
   /rest/leads/skorozvon-bitrix-stats:
@@ -1473,6 +1575,128 @@ paths:
       summary: Регионы
       tags:
       - dicts
+  /rest/google/sheets:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.GoogleSheetList'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Инстансы Google Sheets
+      tags:
+      - google
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Инстанс
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.GoogleSheetRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.GoogleSheet'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Создать инстанс Google Sheets
+      tags:
+      - google
+  /rest/google/sheets/{id}:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID инстанса
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Инстанс
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.GoogleSheetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/entity.GoogleSheet'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Обновить инстанс Google Sheets
+      tags:
+      - google
+    delete:
+      parameters:
+      - description: ID инстанса
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Удалить инстанс Google Sheets
+      tags:
+      - google
   /rest/skorozvon/events:
     get:
       consumes:
@@ -1669,6 +1893,31 @@ paths:
       tags:
       - skorozvon
   /rest/skorozvon/links/{id}:
+    delete:
+      parameters:
+      - description: ID связки
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Удалить связку Скорозвона
+      tags:
+      - skorozvon
     put:
       consumes:
       - application/json
@@ -1711,60 +1960,6 @@ paths:
       summary: Обновить связку Скорозвона
       tags:
       - skorozvon
-  /rest/skorozvon/projects:
-    get:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/response.SuccessEnvelope'
-            - properties:
-                data:
-                  $ref: '#/definitions/dto.SkorozvonProjectList'
-              type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/response.ErrorEnvelope'
-      summary: Проекты Скорозвона
-      tags:
-      - skorozvon
-    post:
-      consumes:
-      - application/json
-      parameters:
-      - description: Проект
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/dto.SkorozvonProjectRequest'
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            allOf:
-            - $ref: '#/definitions/response.SuccessEnvelope'
-            - properties:
-                data:
-                  $ref: '#/definitions/entity.SkorozvonProject'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/response.ErrorEnvelope'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/response.ErrorEnvelope'
-      summary: Добавить проект Скорозвона
-      tags:
-      - skorozvon
   /rest/skorozvon/projects/{uuid}/test:
     post:
       parameters:
@@ -1800,7 +1995,75 @@ paths:
       summary: Тестовая отправка в проект Скорозвона
       tags:
       - skorozvon
+  /rest/skorozvon/projects/list:
+    get:
+      parameters:
+      - default: 0
+        description: Смещение
+        in: query
+        name: offset
+        type: integer
+      - description: Поиск по названию
+        in: query
+        name: name
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SkorozvonProjectList'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Проекты Скорозвона
+      tags:
+      - skorozvon
   /rest/skorozvon/projects/refresh:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: UUID проектов; пусто — все
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/dto.SkorozvonProjectRefreshRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SkorozvonProjectList'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Обновить проекты из Скорозвона
+      tags:
+      - skorozvon
+  /rest/skorozvon/projects/sync:
     post:
       produces:
       - application/json
@@ -1818,7 +2081,7 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/response.ErrorEnvelope'
-      summary: Обновить проекты из Скорозвона
+      summary: Синхронизировать проекты Скорозвона
       tags:
       - skorozvon
   /rest/sources:
@@ -1840,6 +2103,39 @@ paths:
           schema:
             $ref: '#/definitions/response.ErrorEnvelope'
       summary: Источники
+      tags:
+      - sources
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Источник
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/dto.CreateSourceRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.SuccessEnvelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/dto.SourceDTO'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorEnvelope'
+      summary: Создать родительский источник
       tags:
       - sources
   /rest/sources/{id}:

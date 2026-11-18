@@ -180,6 +180,30 @@ func TestCreateChild(t *testing.T) {
 	}
 }
 
+func TestCreateParent(t *testing.T) {
+	repo := stubSources{byID: map[int]entity.Source{}}
+	src, err := NewSourceService(repo).Create(context.Background(), CreateSourceInput{
+		Name:       "  Новый  ",
+		BitrixCode: " UC_TEST ",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.ID == 0 || src.Name != "Новый" || src.ParentID != nil || src.BitrixCode != "UC_TEST" {
+		t.Fatalf("%+v", src)
+	}
+	if !src.IsActive || src.Token != "" {
+		t.Fatalf("parent must be active without token: %+v", src)
+	}
+}
+
+func TestCreateParentRequiresName(t *testing.T) {
+	_, err := NewSourceService(stubSources{byID: map[int]entity.Source{}}).Create(context.Background(), CreateSourceInput{Name: "  "})
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestCreateChildRejectsNested(t *testing.T) {
 	parent := 12
 	svc := NewSourceService(stubSources{byID: map[int]entity.Source{

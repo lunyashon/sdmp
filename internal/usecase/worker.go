@@ -17,6 +17,7 @@ import (
 	"github.com/lunyashon/sdmp/internal/lib/operator"
 	"github.com/lunyashon/sdmp/internal/lib/phone"
 	"github.com/lunyashon/sdmp/internal/lib/phonesearch"
+	"github.com/lunyashon/sdmp/internal/lib/recordinglink"
 	"github.com/lunyashon/sdmp/internal/port"
 	"golang.org/x/sync/errgroup"
 )
@@ -28,6 +29,7 @@ type formPoster interface {
 type PhoneSearch interface {
 	Search(ctx context.Context, phone string) (phonesearch.Result, error)
 	CheckDuplicate(ctx context.Context, phone string) (bool, error)
+	CheckDuplicateOld(ctx context.Context, phone string) (duplicate bool, write bool, err error)
 }
 
 const (
@@ -37,32 +39,58 @@ const (
 	outboxLockTTL      = 2 * time.Minute
 	outboxBx24Stale    = 5 * time.Minute
 
-	// bx24LeadCreateEnabled: false — drain outbox_bx24 without crm.lead.add / bind.
-	bx24LeadCreateEnabled = false
+	// bx24LeadCreateEnabled: false — drain without crm.lead.add / bind.
+	bx24LeadCreateEnabled = true
 )
 
 var partnerRetryWaits = []time.Duration{5 * time.Second, 10 * time.Second, 25 * time.Second}
 
+// skorozvonRetryWaits — паузы внутри одной попытки отправки в СК.
+var skorozvonRetryWaits = []time.Duration{time.Second, 5 * time.Second, 10 * time.Second, 15 * time.Second}
+
+// skorozvonOutboxDelays — паузы между попытками outbox. После последней строка остаётся для ручной переотправки.
+var skorozvonOutboxDelays = []time.Duration{time.Minute, 5 * time.Minute, 10 * time.Minute, 15 * time.Minute, 30 * time.Minute}
+
+// outboxBx24RetryDelays — 5 ретраев после первой попытки, пауза 5 минут.
+var outboxBx24RetryDelays = []time.Duration{
+	outboxBx24Stale,
+	outboxBx24Stale,
+	outboxBx24Stale,
+	outboxBx24Stale,
+	outboxBx24Stale,
+}
+
 type WorkerService struct {
-	phoneSearch PhoneSearch
-	outbox      port.OutboxRepository
-	outboxBx24  port.OutboxBx24Repository
-	dicts       port.DictRepository
-	leads       port.LeadRepository
-	splits      port.SplitRepository
-	partners    port.PartnerRepository
-	links       port.SkorozvonLinkRepository
-	skorozvon   port.Skorozvon
-	maps        port.SkorozvonMapRepository
-	bx24        bx24API
-	poster      formPoster
-	retryWaits  []time.Duration
-	log         *slog.Logger
-	limit       int
-	workers     int
-	idle        time.Duration
-	onErr       time.Duration
-	createBx24  bool
+	phoneSearch     PhoneSearch
+	outbox          port.OutboxRepository
+	outboxBx24      port.OutboxBx24Repository
+	outboxSkorozvon port.OutboxSkorozvonRepository
+	dicts           port.DictRepository
+	leads           port.LeadRepository
+	splits          port.SplitRepository
+	partners        port.PartnerRepository
+	googleSheets    port.GoogleSheetRepository
+	googleAPI       port.GoogleSheets
+	links           port.SkorozvonLinkRepository
+	crmcallsLinks   port.CrmcallsLinkRepository
+	crmcallsAPI     port.Crmcalls
+	outboxCrmcalls  port.OutboxCrmcallsRepository
+	skorozvon       port.Skorozvon
+	maps            port.SkorozvonMapRepository
+	bitrixMaps      port.BitrixMapRepository
+	projects        *SkorozvonProjectService
+	bx24            bx24API
+	poster          formPoster
+	retryWaits      []time.Duration
+	skorozvonWaits  []time.Duration
+	log             *slog.Logger
+	limit           int
+	workers         int
+	idle            time.Duration
+	onErr           time.Duration
+	createBx24      bool
+	recordingBase   string
+	recordingSecret string
 }
 
 func NewWorkerService(
@@ -110,6 +138,24 @@ func (s *WorkerService) WithOutboxBx24(box port.OutboxBx24Repository) *WorkerSer
 	return s
 }
 
+func (s *WorkerService) WithOutboxSkorozvon(box port.OutboxSkorozvonRepository) *WorkerService {
+	s.outboxSkorozvon = box
+	return s
+}
+
+func (s *WorkerService) WithGoogleSheets(repo port.GoogleSheetRepository, api port.GoogleSheets) *WorkerService {
+	s.googleSheets = repo
+	s.googleAPI = api
+	return s
+}
+
+func (s *WorkerService) WithCrmcalls(links port.CrmcallsLinkRepository, api port.Crmcalls, box port.OutboxCrmcallsRepository) *WorkerService {
+	s.crmcallsLinks = links
+	s.crmcallsAPI = api
+	s.outboxCrmcalls = box
+	return s
+}
+
 type bx24API interface {
 	SearchLead(ctx context.Context, idempotencyKey string) (crm.LeadSearchResult, error)
 	AddLead(ctx context.Context, payload []byte) (crm.LeadAddResult, error)
@@ -118,6 +164,34 @@ type bx24API interface {
 func (s *WorkerService) WithBx24(api bx24API) *WorkerService {
 	s.bx24 = api
 	return s
+}
+
+func (s *WorkerService) WithRecordingLink(base, secret string) *WorkerService {
+	if s == nil {
+		return nil
+	}
+	s.recordingBase = strings.TrimRight(strings.TrimSpace(base), "/")
+	s.recordingSecret = strings.TrimSpace(secret)
+	return s
+}
+
+func (s *WorkerService) WithBitrixMaps(maps port.BitrixMapRepository) *WorkerService {
+	s.bitrixMaps = maps
+	return s
+}
+
+func (s *WorkerService) leadFieldMap(ctx context.Context) (crm.LeadFieldMap, error) {
+	if s.bitrixMaps == nil {
+		return crm.DefaultLeadFieldMap(), nil
+	}
+	rows, err := s.bitrixMaps.ListMaps(ctx)
+	if err != nil {
+		return crm.LeadFieldMap{}, err
+	}
+	if len(rows) == 0 {
+		return crm.DefaultLeadFieldMap(), nil
+	}
+	return crm.LeadFieldMapFromRows(rows), nil
 }
 
 func (s *WorkerService) Run(ctx context.Context) error {
@@ -134,6 +208,34 @@ func (s *WorkerService) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			s.loopSkorozvonMaps(ctx)
+		}()
+	}
+	if s.projects != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.loopSkorozvonProjects(ctx)
+		}()
+	}
+	if s.outboxSkorozvon != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.loopOutboxSkorozvon(ctx)
+		}()
+	}
+	if s.outboxCrmcalls != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.loopOutboxCrmcalls(ctx)
+		}()
+	}
+	if s.outboxBx24 != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.loopOutboxBx24(ctx)
 		}()
 	}
 	wg.Wait()
@@ -154,15 +256,28 @@ func (s *WorkerService) loop(ctx context.Context) {
 			}
 			continue
 		}
-		bx, bxErr := s.ProcessBx24(ctx)
-		if bxErr != nil {
-			s.log.ErrorContext(ctx, "outbox_bx24 batch failed", "error", bxErr)
+		if n == 0 {
+			if err := wait(ctx, s.idle); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (s *WorkerService) loopOutboxBx24(ctx context.Context) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		n, err := s.ProcessBx24(ctx)
+		if err != nil {
+			s.log.ErrorContext(ctx, "outbox_bx24 batch failed", "error", err)
 			if err := wait(ctx, s.onErr); err != nil {
 				return
 			}
 			continue
 		}
-		if n == 0 && bx == 0 {
+		if n == 0 {
 			if err := wait(ctx, s.idle); err != nil {
 				return
 			}
@@ -181,29 +296,207 @@ func (s *WorkerService) Process(ctx context.Context) (int, error) {
 	defer func() { _ = s.outbox.Release(ctx, claim.Token) }()
 
 	n := 0
+	var firstErr error
 	for _, msg := range claim.Messages {
 		if err := s.Handle(ctx, msg); err != nil {
-			return n, fmt.Errorf("handle outbox %d lead %d: %w", msg.ID, msg.LeadRowID, err)
+			s.log.Error("outbox handle failed",
+				"outbox_id", msg.ID,
+				"lead_id", msg.LeadRowID,
+				"error", err,
+			)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("handle outbox %d lead %d: %w", msg.ID, msg.LeadRowID, err)
+			}
+			continue
 		}
 		if err := s.outbox.Complete(ctx, claim.Token, msg.ID); err != nil {
 			return n, fmt.Errorf("complete outbox %d: %w", msg.ID, err)
 		}
 		n++
 	}
-	return n, nil
+	return n, firstErr
 }
 
 func (s *WorkerService) ProcessBx24(ctx context.Context) (int, error) {
 	if s.outboxBx24 == nil {
 		return 0, nil
 	}
-	items, err := s.outboxBx24.Claim(ctx, s.limit, outboxBx24Stale)
+	items, err := s.outboxBx24.Claim(ctx, s.limit, outboxLockTTL)
 	if err != nil {
 		return 0, fmt.Errorf("claim outbox_bx24: %w", err)
 	}
 	for _, item := range items {
+		s.log.Info("outbox_bx24 handle", "item", item)
 		if err := s.handleBx24(ctx, item); err != nil {
 			s.log.Error("outbox_bx24 handle failed",
+				"uuid", item.UUID,
+				"uuid_lead", item.LeadUUID,
+				"count_retry", item.CountRetry,
+				"error", err,
+			)
+			s.retryOutboxBx24(ctx, item, err)
+		}
+	}
+	return len(items), nil
+}
+
+func (s *WorkerService) loopOutboxSkorozvon(ctx context.Context) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		n, err := s.ProcessSkorozvon(ctx)
+		if err != nil {
+			s.log.ErrorContext(ctx, "outbox_skorozvon batch failed", "error", err)
+			if err := wait(ctx, s.onErr); err != nil {
+				return
+			}
+			continue
+		}
+		if n == 0 {
+			if err := wait(ctx, s.idle); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (s *WorkerService) ProcessSkorozvon(ctx context.Context) (int, error) {
+	if s.outboxSkorozvon == nil || s.leads == nil || s.links == nil || s.skorozvon == nil {
+		return 0, nil
+	}
+	items, err := s.outboxSkorozvon.Claim(ctx, s.limit, outboxLockTTL)
+	if err != nil {
+		return 0, fmt.Errorf("claim outbox_skorozvon: %w", err)
+	}
+	var wg sync.WaitGroup
+	for _, item := range items {
+		item := item
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.log.Info("outbox_skorozvon handle", "item", item)
+			if err := s.handleSkorozvonOutbox(ctx, item); err != nil {
+				s.log.Error("outbox_skorozvon handle failed",
+					"uuid", item.UUID,
+					"uuid_lead", item.LeadUUID,
+					"count_retry", item.CountRetry,
+					"error", err,
+				)
+				s.retryOutboxSkorozvon(ctx, item, err)
+				return
+			}
+			if err := s.outboxSkorozvon.Complete(ctx, item.UUID); err != nil {
+				s.log.Error("outbox_skorozvon complete failed",
+					"uuid", item.UUID,
+					"uuid_lead", item.LeadUUID,
+					"error", err,
+				)
+			}
+		}()
+	}
+	wg.Wait()
+	return len(items), nil
+}
+
+func (s *WorkerService) handleSkorozvonOutbox(ctx context.Context, item entity.OutboxSkorozvon) error {
+	lead, err := s.leads.GetForSkorozvon(ctx, item.LeadUUID)
+	if err != nil {
+		return fmt.Errorf("get lead: %w", err)
+	}
+	if lead.ID <= 0 || strings.TrimSpace(lead.Phone) == "" {
+		return fmt.Errorf("lead %s is not ready", item.LeadUUID)
+	}
+	if item.ProjectID != nil && *item.ProjectID > 0 {
+		return s.sendImportedSkorozvon(ctx, lead, *item.ProjectID)
+	}
+	return s.sendToSkorozvon(ctx, lead, zaryaDuplicate(lead.Zarya))
+}
+
+func (s *WorkerService) sendImportedSkorozvon(ctx context.Context, lead entity.LeadForSkorozvon, projectID int64) error {
+	return s.sendOneSkorozvon(ctx, lead, entity.SkorozvonLink{
+		Name:      "import",
+		ProjectID: projectID,
+	})
+}
+
+func (s *WorkerService) retryOutboxSkorozvon(ctx context.Context, item entity.OutboxSkorozvon, sendErr error) {
+	next, delay, exhausted := nextSkorozvonOutboxRetry(item.CountRetry)
+	lockFor := delay
+	if exhausted {
+		lockFor = -1
+		s.log.Error("outbox_skorozvon retries exhausted",
+			"uuid", item.UUID,
+			"uuid_lead", item.LeadUUID,
+			"count_retry", next,
+			"error", sendErr,
+		)
+	}
+	if err := s.outboxSkorozvon.MarkRetry(ctx, item.UUID, next, lockFor); err != nil {
+		s.log.Error("outbox_skorozvon mark retry failed",
+			"uuid", item.UUID,
+			"uuid_lead", item.LeadUUID,
+			"error", err,
+		)
+	}
+}
+
+func nextSkorozvonOutboxRetry(countRetry int16) (int16, time.Duration, bool) {
+	next := countRetry + 1
+	if int(countRetry) >= len(skorozvonOutboxDelays) {
+		return next, 0, true
+	}
+	return next, skorozvonOutboxDelays[countRetry], false
+}
+
+func zaryaDuplicate(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return n == "дубль" || n == "dup"
+}
+
+func (s *WorkerService) loopOutboxCrmcalls(ctx context.Context) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		n, err := s.ProcessCrmcalls(ctx)
+		if err != nil {
+			s.log.ErrorContext(ctx, "outbox_crmcalls batch failed", "error", err)
+			if err := wait(ctx, s.onErr); err != nil {
+				return
+			}
+			continue
+		}
+		if n == 0 {
+			if err := wait(ctx, s.idle); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (s *WorkerService) ProcessCrmcalls(ctx context.Context) (int, error) {
+	if s.outboxCrmcalls == nil || s.leads == nil || s.crmcallsLinks == nil || s.crmcallsAPI == nil {
+		return 0, nil
+	}
+	items, err := s.outboxCrmcalls.Claim(ctx, s.limit, outboxLockTTL)
+	if err != nil {
+		return 0, fmt.Errorf("claim outbox_crmcalls: %w", err)
+	}
+	for _, item := range items {
+		s.log.Info("outbox_crmcalls handle", "item", item)
+		if err := s.handleCrmcallsOutbox(ctx, item); err != nil {
+			s.log.Error("outbox_crmcalls handle failed",
+				"uuid", item.UUID,
+				"uuid_lead", item.LeadUUID,
+				"count_retry", item.CountRetry,
+				"error", err,
+			)
+			s.retryOutboxCrmcalls(ctx, item, err)
+			continue
+		}
+		if err := s.outboxCrmcalls.Complete(ctx, item.UUID); err != nil {
+			s.log.Error("outbox_crmcalls complete failed",
 				"uuid", item.UUID,
 				"uuid_lead", item.LeadUUID,
 				"error", err,
@@ -213,7 +506,195 @@ func (s *WorkerService) ProcessBx24(ctx context.Context) (int, error) {
 	return len(items), nil
 }
 
+func (s *WorkerService) handleCrmcallsOutbox(ctx context.Context, item entity.OutboxCrmcalls) error {
+	lead, err := s.leads.GetForSkorozvon(ctx, item.LeadUUID)
+	if err != nil {
+		return fmt.Errorf("get lead: %w", err)
+	}
+	if lead.ID <= 0 || strings.TrimSpace(lead.Phone) == "" {
+		return fmt.Errorf("lead %s is not ready", item.LeadUUID)
+	}
+	return s.sendToCrmcalls(ctx, lead, zaryaDuplicate(lead.Zarya))
+}
+
+func (s *WorkerService) sendToCrmcalls(ctx context.Context, lead entity.LeadForSkorozvon, duplicate bool) error {
+	if s.crmcallsLinks == nil || s.crmcallsAPI == nil {
+		return nil
+	}
+	childID := 0
+	if lead.ChildSourceID != nil {
+		childID = *lead.ChildSourceID
+	}
+	kind := "uniq"
+	if duplicate {
+		kind = "dup"
+	}
+	items, err := s.crmcallsLinks.ListRoutable(ctx, kind, childID, lead.RegionID)
+	if err != nil {
+		return fmt.Errorf("list crmcalls links: %w", err)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	var firstErr error
+	for i := range items {
+		if err := s.sendOneCrmcalls(ctx, lead, items[i]); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (s *WorkerService) sendOneCrmcalls(ctx context.Context, lead entity.LeadForSkorozvon, link entity.CrmcallsLink) error {
+	if s.leads != nil {
+		sent, err := s.leads.HasCrmcallsSent(ctx, lead.ID, link.ProjectID)
+		if err != nil {
+			return fmt.Errorf("has crmcalls sent: %w", err)
+		}
+		if sent {
+			s.log.Info("crmcalls skip already sent",
+				"lead_id", lead.ID,
+				"project_id", link.ProjectID,
+				"name", link.Name,
+			)
+			return nil
+		}
+	}
+	res, err := s.crmcallsAPI.SendLead(ctx, port.CrmcallsLead{
+		Phone:      lead.Phone,
+		ExternalID: strings.TrimSpace(lead.UUID),
+		ProjectID:  link.ProjectID,
+		Region:     strings.TrimSpace(lead.Region),
+	})
+	ok := err == nil && res.Status >= 200 && res.Status < 300
+	if !ok {
+		s.log.Error("crmcalls send failed",
+			"lead_id", lead.ID,
+			"project_id", link.ProjectID,
+			"name", link.Name,
+			"status", res.Status,
+			"error", err,
+			"body", string(res.Body),
+		)
+	} else {
+		s.log.Info("crmcalls sent",
+			"lead_id", lead.ID,
+			"project_id", link.ProjectID,
+			"name", link.Name,
+			"contact_id", res.ContactID,
+			"status", res.Status,
+		)
+	}
+	if ok && s.leads != nil {
+		if err := s.leads.BindCrmcalls(ctx, lead.ID, res.ContactID, link.ProjectID); err != nil {
+			s.log.Error("bind crmcalls failed", "lead_id", lead.ID, "error", err)
+		}
+	}
+	s.saveCrmcallsDispatch(ctx, lead.ID, link.ProjectID, ok, res, err)
+	if ok {
+		return nil
+	}
+	if res.Status > 0 && res.Status < 500 && res.Status != http.StatusTooManyRequests {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("crmcalls status %d", res.Status)
+}
+
+func (s *WorkerService) saveCrmcallsDispatch(ctx context.Context, leadID int64, projectID string, ok bool, res port.CrmcallsSendResult, sendErr error) {
+	if s.leads == nil || leadID <= 0 {
+		return
+	}
+	in := entity.Dispatch{
+		LeadRowID:          leadID,
+		ChannelID:          entity.ChannelCrmcalls,
+		SkorozvonProjectID: projectID,
+		SentOK:             ok,
+		Attempts:           1,
+		ExternalID:         strings.TrimSpace(res.ContactID),
+		RawResponse:        strings.TrimSpace(string(res.Body)),
+	}
+	if res.Status > 0 {
+		in.HTTPStatus = &res.Status
+	}
+	if in.RawResponse == "" && sendErr != nil {
+		in.RawResponse = sendErr.Error()
+	}
+	if err := s.leads.InsertDispatch(ctx, in); err != nil {
+		s.log.Error("save crmcalls dispatch failed",
+			"lead_id", leadID,
+			"project_id", projectID,
+			"error", err,
+		)
+	}
+}
+
+func (s *WorkerService) retryOutboxCrmcalls(ctx context.Context, item entity.OutboxCrmcalls, sendErr error) {
+	next, delay, exhausted := nextSkorozvonOutboxRetry(item.CountRetry)
+	lockFor := delay
+	if exhausted {
+		lockFor = -1
+		s.log.Error("outbox_crmcalls retries exhausted",
+			"uuid", item.UUID,
+			"uuid_lead", item.LeadUUID,
+			"count_retry", next,
+			"error", sendErr,
+		)
+	}
+	if err := s.outboxCrmcalls.MarkRetry(ctx, item.UUID, next, lockFor); err != nil {
+		s.log.Error("outbox_crmcalls mark retry failed",
+			"uuid", item.UUID,
+			"uuid_lead", item.LeadUUID,
+			"error", err,
+		)
+	}
+}
+
+func (s *WorkerService) enqueueOutboxCrmcalls(ctx context.Context, leadUUID string) error {
+	if s.outboxCrmcalls == nil {
+		return nil
+	}
+	leadUUID = strings.TrimSpace(leadUUID)
+	if leadUUID == "" {
+		return fmt.Errorf("enqueue outbox_crmcalls: uuid_lead is required")
+	}
+	if err := s.outboxCrmcalls.Enqueue(ctx, leadUUID); err != nil {
+		return fmt.Errorf("enqueue outbox_crmcalls: %w", err)
+	}
+	return nil
+}
+
+func (s *WorkerService) enqueueOutboxSkorozvon(ctx context.Context, leadUUID string) error {
+	if s.outboxSkorozvon == nil {
+		return nil
+	}
+	leadUUID = strings.TrimSpace(leadUUID)
+	if leadUUID == "" {
+		return fmt.Errorf("enqueue outbox_skorozvon: uuid_lead is required")
+	}
+	if err := s.outboxSkorozvon.Enqueue(ctx, leadUUID); err != nil {
+		return fmt.Errorf("enqueue outbox_skorozvon: %w", err)
+	}
+	return nil
+}
+
 func (s *WorkerService) handleBx24(ctx context.Context, item entity.OutboxBx24) error {
+	if s.leads == nil {
+		return fmt.Errorf("leads repo is required")
+	}
+	lead, err := s.leads.GetByUUID(ctx, item.LeadUUID)
+	if err != nil {
+		return fmt.Errorf("get lead: %w", err)
+	}
+	if !lead.ViaUs {
+		s.log.Info("outbox_bx24 skipped, not via_us",
+			"uuid", item.UUID,
+			"uuid_lead", item.LeadUUID,
+		)
+		return s.outboxBx24.Complete(ctx, item.UUID)
+	}
 	if !s.createBx24 {
 		s.log.Info("outbox_bx24 skipped, drop",
 			"uuid", item.UUID,
@@ -233,14 +714,14 @@ func (s *WorkerService) handleBx24(ctx context.Context, item entity.OutboxBx24) 
 		return s.bindBx24(ctx, item, res.ID)
 	}
 
-	if s.leads == nil {
-		return fmt.Errorf("leads repo is required")
-	}
-	lead, err := s.leads.GetByUUID(ctx, item.LeadUUID)
+	m, err := s.leadFieldMap(ctx)
 	if err != nil {
-		return fmt.Errorf("get lead: %w", err)
+		return err
 	}
-	payload, err := crm.LeadAddPayload(lead)
+	if u := s.bitrixCallURL(lead); u != "" {
+		lead.CallURL = u
+	}
+	payload, err := crm.LeadAddPayloadMapped(lead, m)
 	if err != nil {
 		return fmt.Errorf("bx24 payload: %w", err)
 	}
@@ -260,9 +741,52 @@ func (s *WorkerService) handleBx24(ctx context.Context, item entity.OutboxBx24) 
 		return err
 	}
 	if added.ID == 0 {
-		return nil
+		return fmt.Errorf("bx24 crm.lead.add: empty id")
 	}
 	return s.bindBx24(ctx, item, added.ID)
+}
+
+// bitrixCallURL — наша ссылка-прокси, если запись можно отдать. Пусто = оставить call_url лида.
+func (s *WorkerService) bitrixCallURL(lead entity.LeadDetail) string {
+	if s == nil || s.recordingBase == "" || s.recordingSecret == "" || strings.TrimSpace(lead.UUID) == "" {
+		return ""
+	}
+	if strings.TrimSpace(lead.CallURL) == "" && crm.ResolveCallURL("", lead.CallID) == "" {
+		return ""
+	}
+	return recordinglink.URL(s.recordingBase, s.recordingSecret, lead.UUID)
+}
+
+func (s *WorkerService) retryOutboxBx24(ctx context.Context, item entity.OutboxBx24, sendErr error) {
+	if s.outboxBx24 == nil {
+		return
+	}
+	next, delay, exhausted := nextBx24OutboxRetry(item.CountRetry)
+	lockFor := delay
+	if exhausted {
+		lockFor = -1
+		s.log.Error("outbox_bx24 retries exhausted",
+			"uuid", item.UUID,
+			"uuid_lead", item.LeadUUID,
+			"count_retry", next,
+			"error", sendErr,
+		)
+	}
+	if err := s.outboxBx24.MarkRetry(ctx, item.UUID, next, lockFor); err != nil {
+		s.log.Error("outbox_bx24 mark retry failed",
+			"uuid", item.UUID,
+			"uuid_lead", item.LeadUUID,
+			"error", err,
+		)
+	}
+}
+
+func nextBx24OutboxRetry(countRetry int16) (int16, time.Duration, bool) {
+	next := countRetry + 1
+	if int(countRetry) >= len(outboxBx24RetryDelays) {
+		return next, 0, true
+	}
+	return next, outboxBx24RetryDelays[countRetry], false
 }
 
 func (s *WorkerService) bindBx24(ctx context.Context, item entity.OutboxBx24, bitrixLeadID int64) error {
@@ -289,6 +813,9 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 	}
 
 	regionRaw := strings.TrimSpace(fields.RegionUF.String())
+	if phonesearch.BlankRegion(regionRaw) {
+		regionRaw = ""
+	}
 	operatorRaw := strings.TrimSpace(fields.Operator.String())
 	regionSrc := entity.GeoSourceUnknown
 	operatorSrc := entity.GeoSourceUnknown
@@ -300,6 +827,8 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 	}
 
 	var resultDuplicate bool
+	var resultOldDuplicate bool
+	var oldDuplicateEnabled bool
 	if s.phoneSearch != nil {
 		errg, ctxg := errgroup.WithContext(ctx)
 		needLookup := regionRaw == "" || operatorRaw == ""
@@ -311,7 +840,7 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 					return fmt.Errorf("phone search: %w", err)
 				}
 				if regionRaw == "" {
-					regionRaw = strings.TrimSpace(result.Number.Region)
+					regionRaw = result.Number.RegionName()
 					if regionRaw != "" {
 						regionSrc = entity.GeoSourceLookup
 					}
@@ -329,12 +858,29 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 			})
 		}
 
+		// Заря (новая/старая) не должна ронять обогащение: иначе лиды залипают в «принята».
 		errg.Go(func() error {
 			dup, err := s.phoneSearch.CheckDuplicate(ctxg, normalized)
 			if err != nil {
-				return fmt.Errorf("check duplicate: %w", err)
+				s.log.Error("check duplicate failed, treat as unique",
+					"outbox_id", msg.ID, "lead_id", msg.LeadRowID, "error", err)
+				resultDuplicate = false
+				return nil
 			}
 			resultDuplicate = dup
+			return nil
+		})
+		errg.Go(func() error {
+			dup, write, err := s.phoneSearch.CheckDuplicateOld(ctxg, normalized)
+			if err != nil {
+				s.log.Error("check duplicate old failed, skip zarya_old write",
+					"outbox_id", msg.ID, "lead_id", msg.LeadRowID, "error", err)
+				resultOldDuplicate = false
+				oldDuplicateEnabled = false
+				return nil
+			}
+			resultOldDuplicate = dup
+			oldDuplicateEnabled = write
 			return nil
 		})
 
@@ -412,6 +958,14 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 				}
 				return nil
 			})
+			if oldDuplicateEnabled {
+				errg.Go(func() error {
+					if err := s.leads.SaveZaryaOldResult(ctxg, msg.LeadRowID, resultOldDuplicate); err != nil {
+						return fmt.Errorf("save zarya old: %w", err)
+					}
+					return nil
+				})
+			}
 		}
 		if err := errg.Wait(); err != nil {
 			return err
@@ -419,7 +973,7 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		if err := s.sendToPartner(ctx, msg.LeadRowID, msg.SourceID, normalized, regionRaw, enrich.RegionID, resultDuplicate, true); err != nil {
@@ -428,8 +982,20 @@ func (s *WorkerService) Handle(ctx context.Context, msg entity.OutboxMessage) er
 	}()
 	go func() {
 		defer wg.Done()
-		if err := s.sendToSkorozvon(ctx, msg.LeadRowID, msg.LeadUUID, enrich.ChildSourceID, normalized, regionRaw, enrich.RegionID, resultDuplicate); err != nil {
-			s.log.Error("send skorozvon failed", "lead_id", msg.LeadRowID, "error", err)
+		if err := s.sendToGoogleSheets(ctx, msg.LeadRowID, msg.SourceID, normalized, regionRaw, enrich.RegionID, resultDuplicate); err != nil {
+			s.log.Error("send google sheets failed", "lead_id", msg.LeadRowID, "error", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if err := s.enqueueOutboxSkorozvon(ctx, msg.LeadUUID); err != nil {
+			s.log.Error("enqueue outbox_skorozvon failed", "lead_id", msg.LeadRowID, "error", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if err := s.enqueueOutboxCrmcalls(ctx, msg.LeadUUID); err != nil {
+			s.log.Error("enqueue outbox_crmcalls failed", "lead_id", msg.LeadRowID, "error", err)
 		}
 	}()
 	wg.Wait()
@@ -506,19 +1072,19 @@ func (s *WorkerService) applySplit(ctx context.Context, sourceID int, tag string
 	return nil
 }
 
-func (s *WorkerService) sendToSkorozvon(ctx context.Context, leadID int64, leadUUID string, childSourceID *int, phone, region string, regionID *int, duplicate bool) error {
+func (s *WorkerService) sendToSkorozvon(ctx context.Context, lead entity.LeadForSkorozvon, duplicate bool) error {
 	if s.links == nil || s.skorozvon == nil {
-		return nil
+		return fmt.Errorf("skorozvon is not configured")
 	}
 	childID := 0
-	if childSourceID != nil {
-		childID = *childSourceID
+	if lead.ChildSourceID != nil {
+		childID = *lead.ChildSourceID
 	}
 	kind := "uniq"
 	if duplicate {
 		kind = "dup"
 	}
-	items, err := s.links.ListRoutable(ctx, kind, childID, regionID)
+	items, err := s.links.ListRoutable(ctx, kind, childID, lead.RegionID)
 	if err != nil {
 		return fmt.Errorf("list skorozvon links: %w", err)
 	}
@@ -526,31 +1092,57 @@ func (s *WorkerService) sendToSkorozvon(ctx context.Context, leadID int64, leadU
 		return nil
 	}
 
-	var wg sync.WaitGroup
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
 	for i := range items {
 		link := items[i]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.sendOneSkorozvon(ctx, leadID, leadUUID, phone, region, link)
+			if err := s.sendOneSkorozvon(ctx, lead, link); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
 		}()
 	}
 	wg.Wait()
-	return nil
+	return firstErr
 }
 
-func (s *WorkerService) sendOneSkorozvon(ctx context.Context, leadID int64, leadUUID, phone, region string, link entity.SkorozvonLink) {
+func (s *WorkerService) sendOneSkorozvon(ctx context.Context, lead entity.LeadForSkorozvon, link entity.SkorozvonLink) error {
+	projectID := strconv.FormatInt(link.ProjectID, 10)
+	if s.leads != nil {
+		sent, err := s.leads.HasSkorozvonSent(ctx, lead.ID, projectID)
+		if err != nil {
+			return fmt.Errorf("has skorozvon sent: %w", err)
+		}
+		if sent {
+			s.log.Info("skorozvon skip already sent",
+				"lead_id", lead.ID,
+				"project_id", link.ProjectID,
+				"name", link.Name,
+			)
+			return nil
+		}
+	}
 	res, attempts, err := s.postSkorozvon(ctx, port.SkorozvonLead{
-		ID:         leadID,
-		Phone:      phone,
-		ProjectID:  link.ProjectID,
-		Region:     region,
-		ExternalID: strings.TrimSpace(leadUUID),
+		ID:           lead.ID,
+		Phone:        lead.Phone,
+		ProjectID:    link.ProjectID,
+		Region:       lead.Region,
+		ExternalID:   strings.TrimSpace(lead.UUID),
+		CustomFields: s.skorozvonCustomFields(ctx, lead),
 	})
 	ok := err == nil && res.LeadID > 0 && res.Status >= 200 && res.Status < 300
 	if !ok {
 		s.log.Error("skorozvon send failed",
-			"lead_id", leadID,
+			"lead_id", lead.ID,
 			"project_id", link.ProjectID,
 			"name", link.Name,
 			"status", res.Status,
@@ -560,9 +1152,19 @@ func (s *WorkerService) sendOneSkorozvon(ctx context.Context, leadID int64, lead
 		)
 	}
 	if ok {
-		s.bindSkorozvon(ctx, leadID, strconv.Itoa(res.LeadID), strconv.FormatInt(link.ProjectID, 10))
+		s.bindSkorozvon(ctx, lead.ID, strconv.Itoa(res.LeadID), strconv.FormatInt(link.ProjectID, 10))
 	}
-	s.saveSkorozvonDispatch(ctx, leadID, link.ProjectID, ok, res, attempts, err)
+	s.saveSkorozvonDispatch(ctx, lead.ID, link.ProjectID, ok, res, attempts, err)
+	if ok {
+		return nil
+	}
+	if !retrySkorozvon(res.Status, err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("skorozvon status %d", res.Status)
 }
 
 func (s *WorkerService) bindSkorozvon(ctx context.Context, leadID int64, skorozvonLeadID, projectID string) {
@@ -580,9 +1182,9 @@ func (s *WorkerService) bindSkorozvon(ctx context.Context, leadID int64, skorozv
 }
 
 func (s *WorkerService) postSkorozvon(ctx context.Context, lead port.SkorozvonLead) (port.SkorozvonSendResult, int16, error) {
-	waits := s.retryWaits
+	waits := s.skorozvonWaits
 	if len(waits) == 0 {
-		waits = partnerRetryWaits
+		waits = skorozvonRetryWaits
 	}
 	var (
 		res      port.SkorozvonSendResult
@@ -597,7 +1199,7 @@ func (s *WorkerService) postSkorozvon(ctx context.Context, lead port.SkorozvonLe
 		}
 		attempts++
 		res, err = s.skorozvon.SendLead(ctx, lead)
-		if !retryPartner(res.Status, err) {
+		if !retrySkorozvon(res.Status, err) {
 			return res, attempts, err
 		}
 	}
@@ -629,6 +1231,128 @@ func (s *WorkerService) saveSkorozvonDispatch(ctx context.Context, leadID int64,
 		s.log.Error("save skorozvon dispatch failed",
 			"lead_id", leadID,
 			"project_id", projectID,
+			"error", err,
+		)
+	}
+}
+
+func (s *WorkerService) sendToGoogleSheets(ctx context.Context, leadID int64, sourceID int, phone, region string, regionID *int, duplicate bool) error {
+	if s.googleSheets == nil || s.googleAPI == nil {
+		return nil
+	}
+	phone = strings.TrimSpace(phone)
+	if phone == "" {
+		return nil
+	}
+	zarya := "unique"
+	if duplicate {
+		zarya = "dup"
+	}
+	items, err := s.googleSheets.ListRoutable(ctx, zarya, regionID, sourceID)
+	if err != nil {
+		return fmt.Errorf("list google sheets: %w", err)
+	}
+	s.log.Info("google sheets selected",
+		"lead_id", leadID,
+		"source_id", sourceID,
+		"zarya", zarya,
+		"region", region,
+		"region_id", regionID,
+		"count", len(items),
+	)
+	if len(items) == 0 {
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	for i := range items {
+		sheet := items[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.sendOneGoogleSheet(ctx, leadID, zarya, phone, sheet)
+		}()
+	}
+	wg.Wait()
+	return nil
+}
+
+func (s *WorkerService) sendOneGoogleSheet(ctx context.Context, leadID int64, zarya, phone string, sheet entity.GoogleSheetTarget) {
+	raw, status, attempts, err := s.postGoogleSheet(ctx, sheet, phone)
+	ok := err == nil && status >= 200 && status < 300
+	if !ok {
+		s.log.Error("google sheet send failed",
+			"lead_id", leadID,
+			"sheet_id", sheet.ID,
+			"name", sheet.Name,
+			"spreadsheet_id", sheet.SpreadsheetID,
+			"status", status,
+			"attempts", attempts,
+			"error", err,
+			"body", string(raw),
+		)
+	} else {
+		s.log.Info("google sheet sent",
+			"lead_id", leadID,
+			"sheet_id", sheet.ID,
+			"name", sheet.Name,
+			"spreadsheet_id", sheet.SpreadsheetID,
+			"zarya", zarya,
+			"status", status,
+			"attempts", attempts,
+		)
+	}
+	s.saveGoogleDispatch(ctx, leadID, sheet.ID, ok, status, attempts, raw, err)
+}
+
+func (s *WorkerService) postGoogleSheet(ctx context.Context, sheet entity.GoogleSheetTarget, phone string) ([]byte, int, int16, error) {
+	waits := s.retryWaits
+	if len(waits) == 0 {
+		waits = partnerRetryWaits
+	}
+	var (
+		raw      []byte
+		status   int
+		err      error
+		attempts int16
+	)
+	for i := 0; i <= len(waits); i++ {
+		if i > 0 {
+			if waitErr := wait(ctx, waits[i-1]); waitErr != nil {
+				return raw, status, attempts, waitErr
+			}
+		}
+		attempts++
+		status, raw, err = s.googleAPI.AppendRow(ctx, sheet.Credentials, sheet.SpreadsheetID, sheet.SheetName, []string{phone})
+		if !retryPartner(status, err) {
+			return raw, status, attempts, err
+		}
+	}
+	return raw, status, attempts, err
+}
+
+func (s *WorkerService) saveGoogleDispatch(ctx context.Context, leadID int64, sheetID int, ok bool, status int, attempts int16, raw []byte, sendErr error) {
+	if s.leads == nil || leadID <= 0 {
+		return
+	}
+	in := entity.Dispatch{
+		LeadRowID:   leadID,
+		ChannelID:   entity.ChannelGoogle,
+		SentOK:      ok,
+		Attempts:    attempts,
+		ExternalID:  strconv.Itoa(sheetID),
+		RawResponse: strings.TrimSpace(string(raw)),
+	}
+	if status > 0 {
+		in.HTTPStatus = &status
+	}
+	if in.RawResponse == "" && sendErr != nil {
+		in.RawResponse = sendErr.Error()
+	}
+	if err := s.leads.InsertDispatch(ctx, in); err != nil {
+		s.log.Error("save google sheet dispatch failed",
+			"lead_id", leadID,
+			"sheet_id", sheetID,
 			"error", err,
 		)
 	}
@@ -749,6 +1473,16 @@ func retryPartner(status int, err error) bool {
 		return true
 	}
 	return status == http.StatusTooManyRequests || status >= 500
+}
+
+func retrySkorozvon(status int, err error) bool {
+	if status == http.StatusTooManyRequests || status >= 500 {
+		return true
+	}
+	if status > 0 {
+		return false
+	}
+	return err != nil
 }
 
 func (s *WorkerService) saveBx24Dispatch(ctx context.Context, leadID int64, added crm.LeadAddResult, sendErr error) {

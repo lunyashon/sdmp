@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -34,6 +35,7 @@ type Config struct {
 	DBUser     string
 	DBPassword string
 	DBName     string
+	DBMaxConns int
 
 	RedisAddr     string
 	RedisPassword string
@@ -42,18 +44,42 @@ type Config struct {
 	PhoneSearchURL   string
 	PhoneSearchToken string
 	ZaryaURL         string
+	ZaryaBitrixURL   string
+	// ZaryaForceClean — не ходить на crm-zennit.ru, писать «Чистый». Временно, пока Beget лежит.
+	ZaryaForceClean bool
 
 	SkorozvonLogin  string
 	SkorozvonAPIKey string
 	SkorozvonAppID  string
 	SkorozvonAppKey string
+	// SkorozvonRPS — исходящие запросы в СК. У них лимит 10/сек. 0 выключает.
+	SkorozvonRPS int
+
+	CrmcallsAPIKey  string
+	CrmcallsBaseURL string
+	CrmcallsRPS     int
+	// CrmcallsPostbackKey — X-API-KEY на /rest/crmcalls/events. Пустой секрет = приём закрыт.
+	CrmcallsPostbackKey string
 
 	SodatechBx24URL string
+
+	// PublicBaseURL — внешний хост API (ссылка на запись в Битрикс).
+	PublicBaseURL string
+	// RecordingLinkSecret — HMAC для /rest/recordings/{uuid}.mp3.
+	RecordingLinkSecret string
 
 	SwaggerVersion string
 	SwaggerToken   string
 
+	// AuthLogin / AuthPassword — единственная учётка UI. Пустой пароль выключает проверку.
+	AuthLogin    string
+	AuthPassword string
+
 	Gomaxprocs int
+
+	// CRMLeadAddRPS — лимит crm.lead.add на токен источника. 0 выключает.
+	CRMLeadAddRPS   int
+	CRMLeadAddBurst int
 }
 
 func Load(path string) (*Config, error) {
@@ -103,20 +129,34 @@ func getConfig() *Config {
 		DBUser:              envString("DB_USER", "admin"),
 		DBPassword:          envString("DB_PASS", ""),
 		DBName:              envString("DB_NAME", "sdmp"),
+		DBMaxConns:          envInt("DB_MAX_CONNS", 32),
 		RedisAddr:           envString("REDIS_ADDR", "127.0.0.1:6379"),
 		RedisPassword:       envString("REDIS_PASSWORD", ""),
 		RedisDB:             envInt("REDIS_DB", 0),
 		PhoneSearchURL:      envString("PHONE_SEARCH_URL", "https://bfl-activity.ru/api/v1/retarget/phone.search"),
 		PhoneSearchToken:    envFirst("PHONE_SEARCH_SECRET_TOKEN", "PHONE_SEARCH_SECRE_TOKEN"),
 		ZaryaURL:            envString("ZARYA_API_URL", ""),
+		ZaryaBitrixURL:      envString("ZARYA_BITRIX_URL", ""),
+		ZaryaForceClean:     envBool("ZARYA_FORCE_CLEAN"),
 		Gomaxprocs:          envInt("GOMAXPROCS", 3),
 		SkorozvonLogin:      envString("SKOROZVON_LOGIN", ""),
 		SkorozvonAPIKey:     envString("SKOROZVON_API_KEY", ""),
 		SkorozvonAppID:      envString("SKOROZVON_APP_ID", ""),
 		SkorozvonAppKey:     envString("SKOROZVON_APP_KEY", ""),
-		SodatechBx24URL:     envString("SODATECH_BX24_URL", ""),
+		SkorozvonRPS:        envInt("SKOROZVON_RPS", 8),
+		CrmcallsAPIKey:      envString("CRMCALLS_API_KEY", ""),
+		CrmcallsBaseURL:     envString("CRMCALLS_BASE_URL", "https://cc.crmcalls.ru"),
+		CrmcallsRPS:         envInt("CRMCALLS_RPS", 8),
+		CrmcallsPostbackKey: envString("CRMCALLS_POSTBACK_KEY", ""),
+		SodatechBx24URL:      envString("SODATECH_BX24_URL", ""),
+		PublicBaseURL:       envString("PUBLIC_BASE_URL", "https://cdp-dmp.ru"),
+		RecordingLinkSecret: envString("RECORDING_LINK_SECRET", ""),
 		SwaggerVersion:      envString("SWAGGER_VERSION", "v1"),
 		SwaggerToken:        envString("SWAGGER_TOKEN", ""),
+		AuthLogin:           envString("AUTH_LOGIN", ""),
+		AuthPassword:        envString("AUTH_PASSWORD", ""),
+		CRMLeadAddRPS:       envInt("CRM_LEAD_ADD_RPS", 100),
+		CRMLeadAddBurst:     envInt("CRM_LEAD_ADD_BURST", 32),
 	}
 }
 
@@ -134,6 +174,15 @@ func envFirst(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func envInt(key string, fallback int) int {

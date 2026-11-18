@@ -96,6 +96,212 @@ func (c *Client) SearchLead(ctx context.Context, idempotencyKey string) (LeadSea
 	return out, nil
 }
 
+type LeadFieldInfo struct {
+	Code     string
+	Title    string
+	Type     string
+	Writable bool
+	Raw      map[string]any
+}
+
+type StatusItem struct {
+	ID       string `json:"ID"`
+	EntityID string `json:"ENTITY_ID"`
+	StatusID string `json:"STATUS_ID"`
+	Name     string `json:"NAME"`
+	Sort     any    `json:"SORT"`
+}
+
+func (c *Client) LeadFields(ctx context.Context) ([]LeadFieldInfo, error) {
+	raw, err := c.getMethod(ctx, "crm.lead.fields")
+	if err != nil {
+		return nil, err
+	}
+	fields, err := decodeLeadFields(raw)
+	if err != nil {
+		return nil, fmt.Errorf("bx24 crm.lead.fields: %w", err)
+	}
+	out := make([]LeadFieldInfo, 0, len(fields))
+	for code, info := range fields {
+		item := LeadFieldInfo{
+			Code:     code,
+			Title:    fieldTitle(code, info),
+			Type:     stringValue(info["TYPE"]),
+			Writable: fieldWritable(info),
+			Raw:      info,
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (c *Client) StatusList(ctx context.Context) ([]StatusItem, error) {
+	return c.statusMethod(ctx, "crm.status.list")
+}
+
+func (c *Client) SourceList(ctx context.Context) ([]StatusItem, error) {
+	return c.statusMethod(ctx, "crm.source.list")
+}
+
+func (c *Client) statusMethod(ctx context.Context, method string) ([]StatusItem, error) {
+	raw, err := c.getMethod(ctx, method)
+	if err != nil {
+		return nil, err
+	}
+	items, err := decodeStatusList(raw)
+	if err != nil {
+		return nil, fmt.Errorf("bx24 %s: %w", method, err)
+	}
+	return items, nil
+}
+
+func (c *Client) getMethod(ctx context.Context, method string) ([]byte, error) {
+	if c.base == "/" {
+		return nil, fmt.Errorf("bx24 url is empty")
+	}
+	raw, status, err := c.do(ctx, http.MethodGet, c.base+method, nil, map[string]string{
+		"Accept": "application/json",
+	}, "bx24 "+method)
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("bx24 %s: status %d: %s", method, status, strings.TrimSpace(string(raw)))
+	}
+	return unwrapBxResult(raw)
+}
+
+func unwrapBxResult(raw []byte) ([]byte, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("empty body")
+	}
+	if raw[0] == '[' {
+		return raw, nil
+	}
+	var env struct {
+		Result           json.RawMessage `json:"result"`
+		Error            string          `json:"error"`
+		ErrorDescription string          `json:"error_description"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, err
+	}
+	if env.Error != "" {
+		if env.ErrorDescription != "" {
+			return nil, fmt.Errorf("%s: %s", env.Error, env.ErrorDescription)
+		}
+		return nil, fmt.Errorf("%s", env.Error)
+	}
+	if len(bytes.TrimSpace(env.Result)) > 0 {
+		return env.Result, nil
+	}
+	return raw, nil
+}
+
+func decodeLeadFields(raw []byte) (map[string]map[string]any, error) {
+	var fields map[string]map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	return fields, nil
+}
+
+func decodeStatusList(raw []byte) ([]StatusItem, error) {
+	var items []StatusItem
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func fieldTitle(code string, info map[string]any) string {
+	for _, key := range []string{"TITLE", "title"} {
+		if v := strings.TrimSpace(stringValue(info[key])); v != "" {
+			return v
+		}
+	}
+	if labels, ok := info["LABELS"].(map[string]any); ok {
+		for _, key := range []string{"FORM", "LIST", "FILTER"} {
+			if v := strings.TrimSpace(stringValue(labels[key])); v != "" {
+				return v
+			}
+		}
+	}
+	if v := bitrixStdTitle(code); v != "" {
+		return v
+	}
+	return code
+}
+
+func fieldWritable(info map[string]any) bool {
+	attrs, _ := info["ATTRIBUTES"].([]any)
+	for _, a := range attrs {
+		switch strings.ToUpper(strings.TrimSpace(stringValue(a))) {
+		case "R-O", "HID", "READONLY":
+			return false
+		}
+	}
+	return true
+}
+
+func stringValue(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case json.Number:
+		return t.String()
+	case float64:
+		return strconv.FormatInt(int64(t), 10)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func bitrixStdTitle(code string) string {
+	switch code {
+	case "TITLE":
+		return "Название"
+	case "NAME":
+		return "Имя"
+	case "LAST_NAME":
+		return "Фамилия"
+	case "SECOND_NAME":
+		return "Отчество"
+	case "PHONE":
+		return "Телефон"
+	case "EMAIL":
+		return "Email"
+	case "COMMENTS":
+		return "Комментарий"
+	case "STATUS_ID":
+		return "Стадия"
+	case "SOURCE_ID":
+		return "Источник"
+	case "SOURCE_DESCRIPTION":
+		return "Дополнительно об источнике"
+	case "ASSIGNED_BY_ID":
+		return "Ответственный"
+	case "OPENED":
+		return "Доступен для всех"
+	case "BIRTHDATE":
+		return "Дата рождения"
+	case "COMPANY_TITLE":
+		return "Название компании"
+	case "POST":
+		return "Должность"
+	case "ADDRESS":
+		return "Адрес"
+	case "OPPORTUNITY":
+		return "Сумма"
+	default:
+		return ""
+	}
+}
+
 func (c *Client) AddLead(ctx context.Context, payload []byte) (LeadAddResult, error) {
 	if c.base == "/" {
 		return LeadAddResult{}, fmt.Errorf("bx24 url is empty")

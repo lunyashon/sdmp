@@ -18,6 +18,7 @@ type SkorozvonLinkAPI interface {
 	List(ctx context.Context) ([]entity.SkorozvonLink, error)
 	Create(ctx context.Context, in usecase.SkorozvonLinkInput) (entity.SkorozvonLink, error)
 	Update(ctx context.Context, id int, in usecase.SkorozvonLinkInput) (entity.SkorozvonLink, error)
+	Delete(ctx context.Context, id int) error
 }
 
 type SkorozvonLinksHandler struct {
@@ -100,6 +101,28 @@ func (h *SkorozvonLinksHandler) Update(c *gin.Context) {
 		return
 	}
 	response.Success(c, item)
+}
+
+// Delete
+// @Summary      Удалить связку Скорозвона
+// @Tags         skorozvon
+// @Param        id path int true "ID связки"
+// @Success      204
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      404 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/skorozvon/links/{id} [delete]
+func (h *SkorozvonLinksHandler) Delete(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		response.Error(c, http.StatusBadRequest, "link id is required")
+		return
+	}
+	if err := h.svc.Delete(c.Request.Context(), id); err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func bindSkorozvonLink(c *gin.Context) (usecase.SkorozvonLinkInput, bool) {

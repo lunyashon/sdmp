@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lunyashon/sdmp/internal/adapter/crmcalls"
 	httpgin "github.com/lunyashon/sdmp/internal/adapter/http/gin"
 	"github.com/lunyashon/sdmp/internal/adapter/http/handler"
 	"github.com/lunyashon/sdmp/internal/adapter/http/server"
@@ -16,7 +17,9 @@ import (
 	s3adapter "github.com/lunyashon/sdmp/internal/adapter/s3"
 	"github.com/lunyashon/sdmp/internal/adapter/skorozvon"
 	"github.com/lunyashon/sdmp/internal/lib/config"
+	"github.com/lunyashon/sdmp/internal/lib/crm"
 	sl "github.com/lunyashon/sdmp/internal/lib/logger"
+	"github.com/lunyashon/sdmp/internal/port"
 	"github.com/lunyashon/sdmp/internal/usecase"
 )
 
@@ -43,11 +46,13 @@ func Run() error {
 		cfg.DBUser,
 		cfg.DBPassword,
 		cfg.DBName,
+		cfg.DBMaxConns,
 	))
 	if err != nil {
 		return fmt.Errorf("init postgres: %w", err)
 	}
 	defer pool.Close()
+	log.Info("postgres ready", "max_conns", cfg.DBMaxConns)
 
 	storage, err := s3adapter.New(ctx, s3adapter.Config{
 		AccessKey: cfg.S3AccessKey,
@@ -86,25 +91,52 @@ func Run() error {
 	skorozvonProjectRepo := postgres.NewSkorozvonProjectRepo(pool)
 	sourceSvc := usecase.NewSourceService(sourceRepo)
 	partnerPoster := usecase.NewPartnerPoster(8 * time.Second)
-	leadSvc := usecase.NewLeadService(leadRepo, log).
-		WithStorage(storage).
-		WithPartners(partnerRepo, partnerPoster).
-		WithDicts(dictRepo).
-		WithSkorozvonMaps(postgres.NewSkorozvonMapRepo(pool))
-	partnerSvc := usecase.NewPartnerService(partnerRepo, partnerPoster)
-	splitSvc := usecase.NewSplitService(splitRepo, sourceRepo, dictRepo)
+	skorozvonMapRepo := postgres.NewSkorozvonMapRepo(pool)
+	bitrixMapRepo := postgres.NewBitrixMapRepo(pool)
 	skorozvonClient := skorozvon.New(skorozvon.Config{
 		Login:  cfg.SkorozvonLogin,
 		APIKey: cfg.SkorozvonAPIKey,
 		AppID:  cfg.SkorozvonAppID,
 		AppKey: cfg.SkorozvonAppKey,
+		RPS:    cfg.SkorozvonRPS,
 	}, cache, log)
+	crmcallsSettingsRepo := postgres.NewCrmcallsSettingsRepo(pool)
+	crmcallsCfg := crmcalls.Config{
+		BaseURL: cfg.CrmcallsBaseURL,
+		APIKey:  cfg.CrmcallsAPIKey,
+		RPS:     cfg.CrmcallsRPS,
+	}
+	crmcallsClient := crmcalls.NewDynamic(crmcallsCfg, crmcallsSettingsRepo)
+	leadSvc := usecase.NewLeadService(leadRepo, log).
+		WithStorage(storage).
+		WithPartners(partnerRepo, partnerPoster).
+		WithDicts(dictRepo).
+		WithSkorozvonMaps(skorozvonMapRepo).
+		WithProjects(skorozvonProjectRepo).
+		WithOutboxSkorozvon(postgres.NewOutboxSkorozvonRepo(pool)).
+		WithSources(sourceRepo).
+		WithSkorozvon(skorozvonClient).
+		WithCrmcalls(crmcallsClient)
+	partnerSvc := usecase.NewPartnerService(partnerRepo, partnerPoster)
+	splitSvc := usecase.NewSplitService(splitRepo, sourceRepo, dictRepo)
 	skorozvonProjectSvc := usecase.NewSkorozvonProjectService(skorozvonProjectRepo, skorozvonClient)
 	skorozvonLinkSvc := usecase.NewSkorozvonLinkService(postgres.NewSkorozvonLinkRepo(pool))
+	googleSheetSvc := usecase.NewGoogleSheetService(postgres.NewGoogleSheetRepo(pool))
+	crmcallsProjectRepo := postgres.NewCrmcallsProjectRepo(pool)
+	crmcallsLinkSvc := usecase.NewCrmcallsLinkService(postgres.NewCrmcallsLinkRepo(pool), crmcallsProjectRepo)
+	crmcallsProjectSvc := usecase.NewCrmcallsProjectService(crmcallsProjectRepo, crmcallsClient).WithSettings(
+		crmcallsSettingsRepo,
+		cfg.CrmcallsAPIKey,
+		cfg.CrmcallsBaseURL,
+		func(baseURL, apiKey string) port.Crmcalls {
+			return crmcalls.New(crmcalls.Config{BaseURL: baseURL, APIKey: apiKey, RPS: cfg.CrmcallsRPS})
+		},
+	)
 	receiveSvc := usecase.NewReceiveLeadService(sourceRepo, leadRepo, storage, cache, log)
+	bx24 := usecase.NewBitrixMapService(bitrixMapRepo, skorozvonMapRepo, crm.New(cfg.SodatechBx24URL, nil), log)
 
 	router := httpgin.NewRouter(httpgin.Handlers{
-		Leads:             handler.NewLeadsHandler(leadSvc, log),
+		Leads:             handler.NewLeadsHandler(leadSvc, log).WithRecordingSecret(cfg.RecordingLinkSecret),
 		Sources:           handler.NewSourcesHandler(sourceSvc, log),
 		Dicts:             handler.NewDictsHandler(dictRepo, log),
 		Partners:          handler.NewPartnersHandler(partnerSvc, log),
@@ -113,6 +145,10 @@ func Run() error {
 		SkorozvonLinks:    handler.NewSkorozvonLinksHandler(skorozvonLinkSvc, log),
 		SkorozvonEvents:   handler.NewSkorozvonEventsHandler(leadSvc, log),
 		CRMLead:           handler.NewCRMLeadHandler(receiveSvc, log),
+		Docs:              handler.NewDocsHandler(log),
+		BitrixMaps:        handler.NewBitrixMapsHandler(bx24, log),
+		GoogleSheets:      handler.NewGoogleSheetsHandler(googleSheetSvc, log),
+		Crmcalls:          handler.NewCrmcallsHandler(crmcallsLinkSvc, crmcallsProjectSvc, leadSvc, log).WithPostbackKey(cfg.CrmcallsPostbackKey),
 	}, cfg)
 	srv := server.New(cfg.Port, router, log, cfg)
 

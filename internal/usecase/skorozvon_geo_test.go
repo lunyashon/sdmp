@@ -16,6 +16,10 @@ func (s stubGeoMaps) Get(_ context.Context, fieldID, optionID int64) (entity.Sko
 	row, ok := s.fields[[2]int64{fieldID, optionID}]
 	return row, ok, nil
 }
+func (s stubGeoMaps) ListFields(context.Context) ([]entity.SkorozvonMap, error) { return nil, nil }
+func (s stubGeoMaps) SetBitrixCodes(context.Context, []entity.SkorozvonMap) error {
+	return nil
+}
 
 func TestEnrichSnapGeoFromCustomFields(t *testing.T) {
 	maps := stubGeoMaps{fields: map[[2]int64]entity.SkorozvonMap{
@@ -108,12 +112,14 @@ func TestAnketaFieldsFromCustom(t *testing.T) {
 		{FieldID: 50000009406, Raw: []byte(`50000015671`)},
 		{FieldID: 1, Raw: []byte(`"x"`)},
 		{FieldID: 2, Raw: []byte(`[50000004578, 50000004578]`)},
+		{FieldID: entity.SkorozvonFIOFieldID, Raw: []byte(`"Григорий"`)},
 	})
 	want := []entity.SkorozvonAnketaField{
 		{FieldID: 50000011777, EnumID: 50000004578},
 		{FieldID: 50000011777, EnumID: 50000004560},
 		{FieldID: 50000009406, EnumID: 50000015671},
 		{FieldID: 2, EnumID: 50000004578},
+		{FieldID: entity.SkorozvonFIOFieldID, ValueText: "Григорий"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v want %+v", got, want)
@@ -141,6 +147,26 @@ func TestApplyCallResultSkipsEmptyAnketaFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	if repo.fields != nil {
+		t.Fatalf("fields %+v", repo.fields)
+	}
+}
+
+func TestApplyCallResultPersistsFIOText(t *testing.T) {
+	repo := &stubCallResultRepo{}
+	err := NewLeadService(repo, nil).ApplyCallResult(
+		context.Background(),
+		"123",
+		entity.LeadCallResult{CallID: "1"},
+		entity.LeadFromSkorozvon{
+			CustomFields: []entity.SkorozvonCustomValue{
+				{FieldID: entity.SkorozvonFIOFieldID, Raw: []byte(`"Иван"`)},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.fields) != 1 || repo.fields[0] != (entity.SkorozvonAnketaField{FieldID: entity.SkorozvonFIOFieldID, ValueText: "Иван"}) {
 		t.Fatalf("fields %+v", repo.fields)
 	}
 }

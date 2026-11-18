@@ -211,7 +211,7 @@ func Fields(root map[string]any) map[string]any {
 			fields[k] = v
 		}
 	}
-	for _, key := range []string{"PHONE", "SOURCE_ID", WebIDField} {
+	for _, key := range []string{"PHONE", "SOURCE_ID", "SOURCE_DESCRIPTION", WebIDField} {
 		if _, exists := fields[key]; exists {
 			continue
 		}
@@ -237,17 +237,19 @@ func String(fields map[string]any, key string) string {
 }
 
 type IncomingLead struct {
-	Phone    string
-	SourceID string
-	WebID    string
+	Phone             string
+	SourceID          string
+	SourceDescription string
+	WebID             string
 }
 
 func MapLead(root map[string]any) IncomingLead {
 	fields := Fields(root)
 	return IncomingLead{
-		Phone:    Phone(fields),
-		SourceID: String(fields, "SOURCE_ID"),
-		WebID:    String(fields, WebIDField),
+		Phone:             Phone(fields),
+		SourceID:          String(fields, "SOURCE_ID"),
+		SourceDescription: String(fields, "SOURCE_DESCRIPTION"),
+		WebID:             String(fields, WebIDField),
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	exportMaxRows = 50000
+	exportMaxRows = 150000
 	exportMaxIDs  = 10000
 	xlsxType      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
@@ -40,7 +40,7 @@ var exportColumnCatalog = []exportColumn{
 	{id: "childSource", label: "Подисточник", value: func(r entity.LeadListItem) string { return r.ChildSource }},
 	{id: "baza", label: "Холодная база", value: func(r entity.LeadListItem) string { return r.ColdLabel }},
 	{id: "kakaya", label: "Какая база", value: func(r entity.LeadListItem) string { return r.BaseLabel }},
-	{id: "sourceDesc", label: "Source description", value: func(r entity.LeadListItem) string { return r.SourceDescription }},
+	{id: "sourceDesc", label: "Дополнительно об источнике", value: func(r entity.LeadListItem) string { return r.SourceDescription }},
 	{id: "region", label: "Регион", value: func(r entity.LeadListItem) string { return r.Region }},
 	{id: "city", label: "Город", value: func(r entity.LeadListItem) string { return r.City }},
 	{id: "operator", label: "Оператор", value: func(r entity.LeadListItem) string { return r.Operator }},
@@ -51,7 +51,9 @@ var exportColumnCatalog = []exportColumn{
 		}
 		return "Обновилось"
 	}},
+	{id: "skSend", label: "Отправка в СК", value: formatExportSkSend},
 	{id: "zarya", label: "Проверка Зари", value: func(r entity.LeadListItem) string { return r.Zarya }},
+	{id: "zaryaOld", label: "Старая проверка на дубль", value: func(r entity.LeadListItem) string { return r.ZaryaOld }},
 	{id: "callResult", label: "Результат звонка", value: func(r entity.LeadListItem) string {
 		if strings.TrimSpace(r.CallResultName) != "" {
 			return r.CallResultName
@@ -105,6 +107,7 @@ func (s *LeadService) ExportXLSX(ctx context.Context, q LeadFilterQuery, columns
 		Tag:          strings.TrimSpace(q.Tag),
 		CallResult:   q.CallResult,
 		ViaUs:        q.ViaUs,
+		SkSend:       normalizeSkSend(q.SkSend),
 		IDs:          ids,
 		Limit:        exportMaxRows,
 		Offset:       0,
@@ -119,6 +122,11 @@ func (s *LeadService) ExportXLSX(ctx context.Context, q LeadFilterQuery, columns
 	}
 	if len(ids) == 0 && total > exportMaxRows {
 		return LeadExportFile{}, fmt.Errorf("%w: too many rows (%d), max %d", domain.ErrInvalidInput, total, exportMaxRows)
+	}
+	if exportNeedsSkDispatch(cols) && len(filter.SkSend) == 0 {
+		if err := s.attachSkDispatch(ctx, items); err != nil {
+			return LeadExportFile{}, err
+		}
 	}
 
 	rows := make([][]string, 0, len(items)+1)
@@ -198,4 +206,30 @@ func formatExportTime(t time.Time) string {
 		return ""
 	}
 	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, clock.Location).Format(LeadDateLayout)
+}
+
+func exportNeedsSkDispatch(cols []exportColumn) bool {
+	for _, c := range cols {
+		if c.id == "skSend" {
+			return true
+		}
+	}
+	return false
+}
+
+func formatExportSkSend(r entity.LeadListItem) string {
+	if r.SkSentOK == nil {
+		return ""
+	}
+	if *r.SkSentOK {
+		return "Успех"
+	}
+	msg := "Ошибка"
+	if r.SkHTTPStatus != nil {
+		msg += " " + strconv.Itoa(*r.SkHTTPStatus)
+	}
+	if strings.TrimSpace(r.SkError) != "" {
+		msg += ": " + r.SkError
+	}
+	return msg
 }

@@ -49,6 +49,13 @@ func (s *SkorozvonLinkService) Update(ctx context.Context, id int, in SkorozvonL
 	return s.repo.Update(ctx, item)
 }
 
+func (s *SkorozvonLinkService) Delete(ctx context.Context, id int) error {
+	if id <= 0 {
+		return fmt.Errorf("%w: link id is required", domain.ErrInvalidInput)
+	}
+	return s.repo.Delete(ctx, id)
+}
+
 func normalizeSkorozvonLink(id int, in SkorozvonLinkInput) (entity.SkorozvonLink, error) {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {

@@ -169,21 +169,34 @@ func decodeCustomFieldPart(raw json.RawMessage) []customFieldPart {
 
 func anketaFieldsFromCustom(fields []entity.SkorozvonCustomValue) []entity.SkorozvonAnketaField {
 	seen := map[[2]int64]struct{}{}
+	seenText := map[int64]struct{}{}
 	out := make([]entity.SkorozvonAnketaField, 0)
 	for _, f := range fields {
 		if f.FieldID <= 0 {
 			continue
 		}
 		for _, part := range decodeCustomFieldParts(f.Raw) {
-			if part.optionID <= 0 {
+			if part.optionID > 0 {
+				key := [2]int64{f.FieldID, part.optionID}
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, entity.SkorozvonAnketaField{FieldID: f.FieldID, EnumID: part.optionID})
 				continue
 			}
-			key := [2]int64{f.FieldID, part.optionID}
-			if _, ok := seen[key]; ok {
+			if f.FieldID != entity.SkorozvonFIOFieldID {
 				continue
 			}
-			seen[key] = struct{}{}
-			out = append(out, entity.SkorozvonAnketaField{FieldID: f.FieldID, EnumID: part.optionID})
+			text := entity.UsableSkorozvonName(part.text)
+			if text == "" {
+				continue
+			}
+			if _, ok := seenText[f.FieldID]; ok {
+				continue
+			}
+			seenText[f.FieldID] = struct{}{}
+			out = append(out, entity.SkorozvonAnketaField{FieldID: f.FieldID, ValueText: text})
 		}
 	}
 	return out

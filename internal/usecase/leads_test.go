@@ -12,10 +12,14 @@ import (
 )
 
 type stubLeadList struct {
-	got   port.LeadListFilter
-	items []entity.LeadListItem
-	total int
-	err   error
+	got       port.LeadListFilter
+	items     []entity.LeadListItem
+	total     int
+	err       error
+	skIDs     []int64
+	sk        []entity.LeadSkDispatch
+	resendIDs []int64
+	resend    []entity.LeadSkResend
 }
 
 func (s *stubLeadList) InsertAccepted(context.Context, entity.LeadRow, entity.OutboxMessage) (int64, error) {
@@ -25,6 +29,28 @@ func (s *stubLeadList) InsertAccepted(context.Context, entity.LeadRow, entity.Ou
 func (s *stubLeadList) List(_ context.Context, f port.LeadListFilter) ([]entity.LeadListItem, int, error) {
 	s.got = f
 	return s.items, s.total, s.err
+}
+
+func (s *stubLeadList) ListSkDispatch(_ context.Context, ids []int64) ([]entity.LeadSkDispatch, error) {
+	s.skIDs = ids
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.sk != nil {
+		return s.sk, nil
+	}
+	return []entity.LeadSkDispatch{}, nil
+}
+
+func (s *stubLeadList) ListSkResend(_ context.Context, ids []int64) ([]entity.LeadSkResend, error) {
+	s.resendIDs = ids
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.resend != nil {
+		return s.resend, nil
+	}
+	return []entity.LeadSkResend{}, nil
 }
 
 func (s *stubLeadList) CountBySource(context.Context, time.Time, time.Time) ([]entity.LeadSourceCount, error) {
@@ -49,6 +75,13 @@ func (s *stubLeadList) CountSkorozvonBitrixBySource(context.Context, time.Time, 
 	}}, s.err
 }
 
+func (s *stubLeadList) CountOutgoingDispatch(context.Context, time.Time, time.Time) (entity.LeadOutgoingStats, error) {
+	return entity.LeadOutgoingStats{
+		Partners:  []entity.LeadPartnerDispatchCount{{PartnerID: 4, Count: 33}},
+		Skorozvon: []entity.LeadSkorozvonDispatchCount{{ProjectID: "9", Count: 12}},
+	}, s.err
+}
+
 func (s *stubLeadList) Get(context.Context, int64) (entity.LeadDetail, error) {
 	return entity.LeadDetail{}, nil
 }
@@ -56,12 +89,19 @@ func (s *stubLeadList) Get(context.Context, int64) (entity.LeadDetail, error) {
 func (s *stubLeadList) GetByUUID(context.Context, string) (entity.LeadDetail, error) {
 	return entity.LeadDetail{}, nil
 }
+func (s *stubLeadList) GetForSkorozvon(context.Context, string) (entity.LeadForSkorozvon, error) {
+	return entity.LeadForSkorozvon{}, nil
+}
 
 func (s *stubLeadList) UpdateEnrichment(context.Context, int64, entity.LeadEnrichment) error {
 	return nil
 }
 
 func (s *stubLeadList) InsertDispatch(context.Context, entity.Dispatch) error {
+	return nil
+}
+
+func (s *stubLeadList) SaveZaryaOldResult(context.Context, int64, bool) error {
 	return nil
 }
 
@@ -74,6 +114,22 @@ func (s *stubLeadList) BindSkorozvon(context.Context, int64, string, string) err
 }
 
 func (s *stubLeadList) BindBitrix(context.Context, string, string) error {
+	return nil
+}
+
+func (s *stubLeadList) HasSkorozvonSent(context.Context, int64, string) (bool, error) {
+	return false, nil
+}
+
+func (s *stubLeadList) BindCrmcalls(context.Context, int64, string, string) error {
+	return nil
+}
+
+func (s *stubLeadList) HasCrmcallsSent(context.Context, int64, string) (bool, error) {
+	return false, nil
+}
+
+func (s *stubLeadList) ApplyCrmcallsPostback(context.Context, entity.CrmcallsPostback) error {
 	return nil
 }
 
@@ -98,6 +154,10 @@ func (s *stubLeadList) ReplaceSkorozvonAnketaFields(context.Context, string, []e
 }
 
 func (s *stubLeadList) EnqueueBx24(context.Context, string) error {
+	return nil
+}
+
+func (s *stubLeadList) InsertImport(context.Context, entity.LeadImportRow) error {
 	return nil
 }
 
@@ -127,6 +187,7 @@ func TestFilterLeads(t *testing.T) {
 		Zarya:        []string{"Чистый", "Дубль"},
 		Phone:        "8 (900) 987-65-39",
 		ViaUs:        boolPtr(false),
+		SkSend:       []string{"error", "fail"},
 		IDs:          []int64{42},
 		Limit:        0,
 	})
@@ -151,6 +212,9 @@ func TestFilterLeads(t *testing.T) {
 	if len(repo.got.IDs) != 1 || repo.got.IDs[0] != 42 {
 		t.Fatalf("ids %+v", repo.got.IDs)
 	}
+	if len(repo.got.SkSend) != 1 || repo.got.SkSend[0] != "error" {
+		t.Fatalf("sk_send %+v", repo.got.SkSend)
+	}
 }
 
 func TestFilterLeadsStripsPhoneSpaces(t *testing.T) {
@@ -158,7 +222,7 @@ func TestFilterLeadsStripsPhoneSpaces(t *testing.T) {
 	_, err := NewLeadService(repo, nil).Filter(context.Background(), LeadFilterQuery{
 		DateFrom: "01.08.2026 00:00:00",
 		DateTo:   "30.08.2026 23:59:59",
-		Phone:    "7 900 987 65 39",
+		Phone:    "+7 (900) 987-65-39",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +231,82 @@ func TestFilterLeadsStripsPhoneSpaces(t *testing.T) {
 		t.Fatalf("phone %q", repo.got.Phone)
 	}
 }
+
+func TestListSkDispatchByIDs(t *testing.T) {
+	status := 500
+	repo := &stubLeadList{sk: []entity.LeadSkDispatch{{
+		LeadRowID: 5, SentOK: false, HTTPStatus: &status, Error: "boom",
+	}}}
+	got, err := NewLeadService(repo, nil).ListSkDispatch(context.Background(), []int64{5, 5, 0, 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.skIDs) != 2 || repo.skIDs[0] != 5 || repo.skIDs[1] != 7 {
+		t.Fatalf("ids %+v", repo.skIDs)
+	}
+	if len(got) != 1 || got[0].LeadRowID != 5 || got[0].SentOK || got[0].Error != "boom" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestResendSkorozvonEnqueuesLastProject(t *testing.T) {
+	repo := &stubLeadList{resend: []entity.LeadSkResend{
+		{ID: 11, UUID: "lead-a", ProjectID: "50000191177"},
+		{ID: 12, UUID: "lead-b"},
+	}}
+	box := &stubLeadSkOutbox{}
+	got, err := NewLeadService(repo, nil).WithOutboxSkorozvon(box).ResendSkorozvon(context.Background(), []int64{11, 12, 11, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Queued != 2 || got.Missing != 0 {
+		t.Fatalf("%+v", got)
+	}
+	if len(repo.resendIDs) != 2 || repo.resendIDs[0] != 11 || repo.resendIDs[1] != 12 {
+		t.Fatalf("ids %+v", repo.resendIDs)
+	}
+	if len(box.items) != 2 || box.items[0].uuid != "lead-a" || box.items[0].projectID == nil || *box.items[0].projectID != 50000191177 {
+		t.Fatalf("enqueue %+v", box.items)
+	}
+	if box.items[1].uuid != "lead-b" || box.items[1].projectID != nil {
+		t.Fatalf("enqueue %+v", box.items[1])
+	}
+}
+
+func TestResendSkorozvonRequiresIDs(t *testing.T) {
+	_, err := NewLeadService(&stubLeadList{}, nil).WithOutboxSkorozvon(&stubLeadSkOutbox{}).ResendSkorozvon(context.Background(), nil)
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+type stubLeadSkOutbox struct {
+	items []stubLeadSkEnqueue
+	err   error
+}
+
+type stubLeadSkEnqueue struct {
+	uuid      string
+	projectID *int64
+}
+
+func (s *stubLeadSkOutbox) Enqueue(context.Context, string) error { return nil }
+
+func (s *stubLeadSkOutbox) EnqueueResend(_ context.Context, leadUUID string, projectID *int64) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.items = append(s.items, stubLeadSkEnqueue{uuid: leadUUID, projectID: projectID})
+	return nil
+}
+
+func (s *stubLeadSkOutbox) Claim(context.Context, int, time.Duration) ([]entity.OutboxSkorozvon, error) {
+	return nil, nil
+}
+
+func (s *stubLeadSkOutbox) MarkRetry(context.Context, string, int16, time.Duration) error { return nil }
+
+func (s *stubLeadSkOutbox) Complete(context.Context, string) error { return nil }
 
 func TestFilterInvalidRange(t *testing.T) {
 	svc := NewLeadService(&stubLeadList{}, nil)
@@ -227,6 +367,19 @@ func TestSkorozvonBitrixStats(t *testing.T) {
 	}
 }
 
+func TestOutgoingStats(t *testing.T) {
+	got, err := NewLeadService(&stubLeadList{}, nil).OutgoingStats(context.Background(), "2026-08-14", "2026-08-20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Partners) != 1 || got.Partners[0].PartnerID != 4 || got.Partners[0].Count != 33 {
+		t.Fatalf("%+v", got)
+	}
+	if len(got.Skorozvon) != 1 || got.Skorozvon[0].ProjectID != "9" || got.Skorozvon[0].Count != 12 {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestGetLead(t *testing.T) {
 	created := time.Date(2026, 8, 27, 16, 27, 56, 0, time.Local)
 	repo := &stubLeadGet{
@@ -271,6 +424,70 @@ func TestLeadRaw(t *testing.T) {
 	if got.Filename != "a.json" || string(got.Body) != `{"ok":true}` || got.ContentType != "application/json" {
 		t.Fatalf("%+v", got)
 	}
+}
+
+func TestLeadRecording(t *testing.T) {
+	repo := &stubLeadGet{detail: entity.LeadDetail{ID: 7, CallID: "51616666186"}}
+	api := &stubLeadSK{body: []byte("ID3")}
+	got, err := NewLeadService(repo, nil).WithSkorozvon(api).Recording(context.Background(), 7, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api.callID != "51616666186" || string(got.Body) != "ID3" || got.Filename != "51616666186.mp3" {
+		t.Fatalf("%+v api=%+v", got, api)
+	}
+}
+
+func TestLeadRecordingFromURL(t *testing.T) {
+	repo := &stubLeadGet{detail: entity.LeadDetail{
+		ID: 7, CallURL: "https://app.skorozvon.ru/shards/5/api/calls/51616666186.mp3",
+	}}
+	api := &stubLeadSK{body: []byte("ID3")}
+	got, err := NewLeadService(repo, nil).WithSkorozvon(api).Recording(context.Background(), 7, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api.callID != "51616666186" || got.Filename != "51616666186.mp3" {
+		t.Fatalf("%s %+v", api.callID, got)
+	}
+}
+
+func TestLeadRecordingMissing(t *testing.T) {
+	repo := &stubLeadGet{detail: entity.LeadDetail{ID: 7}}
+	_, err := NewLeadService(repo, nil).WithSkorozvon(&stubLeadSK{}).Recording(context.Background(), 7, "")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestLeadRecordingCrmcalls(t *testing.T) {
+	repo := &stubLeadGet{detail: entity.LeadDetail{
+		ID: 8, CallID: "call-abc", CallURL: "https://cc.crmcalls.ru/api/recordings/call-abc",
+	}}
+	api := &stubLeadCrmcalls{body: []byte("ID3cc")}
+	got, err := NewLeadService(repo, nil).WithCrmcalls(api).Recording(context.Background(), 8, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api.ref != "https://cc.crmcalls.ru/api/recordings/call-abc" || string(got.Body) != "ID3cc" || got.Filename != "call-abc.mp3" {
+		t.Fatalf("%+v api=%+v", got, api)
+	}
+}
+
+type stubLeadCrmcalls struct {
+	ref  string
+	body []byte
+}
+
+func (s *stubLeadCrmcalls) SendLead(context.Context, port.CrmcallsLead) (port.CrmcallsSendResult, error) {
+	return port.CrmcallsSendResult{}, nil
+}
+func (s *stubLeadCrmcalls) ListProjects(context.Context) ([]entity.CrmcallsProject, error) {
+	return nil, nil
+}
+func (s *stubLeadCrmcalls) DownloadRecording(_ context.Context, ref string) ([]byte, string, error) {
+	s.ref = ref
+	return s.body, "audio/mpeg", nil
 }
 
 func TestLeadRawEmptyKey(t *testing.T) {
@@ -354,6 +571,21 @@ func TestApplyCallResult(t *testing.T) {
 	}
 }
 
+func TestApplyCallResultFillsCallURLFromCallID(t *testing.T) {
+	repo := &stubCallResultRepo{}
+	err := NewLeadService(repo, nil).ApplyCallResult(context.Background(), "123", entity.LeadCallResult{
+		CallID:         "51637832641",
+		CallResultName: "Автоответчик",
+	}, entity.LeadFromSkorozvon{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://app.skorozvon.ru/shards/5/api/calls/51637832641.mp3"
+	if repo.got.CallURL != want {
+		t.Fatalf("call_url %q", repo.got.CallURL)
+	}
+}
+
 func TestApplyCallResultQueuesBx24WhenTransferred(t *testing.T) {
 	repo := &stubCallResultRepo{}
 	err := NewLeadService(repo, nil).ApplyCallResult(context.Background(), "51038587780", entity.LeadCallResult{
@@ -372,6 +604,23 @@ func TestApplyCallResultQueuesBx24WhenTransferred(t *testing.T) {
 	}
 	if len(repo.fields) != 1 || repo.fields[0].FieldID != 50000009440 || repo.fields[0].EnumID != 50000014691 {
 		t.Fatalf("fields %+v", repo.fields)
+	}
+}
+
+func TestApplyCallResultQueuesBx24WhenTransferredAfterCreate(t *testing.T) {
+	repo := &stubCallResultRepo{err: domain.ErrNotFound}
+	err := NewLeadService(repo, nil).ApplyCallResult(context.Background(), "99", entity.LeadCallResult{
+		CallID:         "1",
+		CallResultName: "передан лид",
+	}, entity.LeadFromSkorozvon{Phone: "79001234567"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.applyN != 2 || repo.inserted == nil {
+		t.Fatalf("applyN=%d inserted=%v", repo.applyN, repo.inserted)
+	}
+	if repo.queued != "99" {
+		t.Fatalf("queued %q", repo.queued)
 	}
 }
 
@@ -480,6 +729,21 @@ func (s *stubLeadGet) GetByUUID(_ context.Context, uuid string) (entity.LeadDeta
 	return s.detail, nil
 }
 
+func (s *stubLeadGet) GetForSkorozvon(_ context.Context, uuid string) (entity.LeadForSkorozvon, error) {
+	s.gotUUID = uuid
+	return entity.LeadForSkorozvon{
+		ID:                s.detail.ID,
+		UUID:              s.detail.UUID,
+		Phone:             s.detail.Phone,
+		ChildSourceID:     s.detail.ChildSourceID,
+		Region:            s.detail.Region,
+		RegionID:          s.detail.RegionID,
+		Zarya:             s.detail.Zarya,
+		ColdLabel:         s.detail.ColdLabel,
+		SourceDescription: s.detail.SourceDescription,
+	}, nil
+}
+
 func (s *stubLeadGet) InsertDispatch(_ context.Context, in entity.Dispatch) error {
 	s.dispatch = in
 	return nil
@@ -511,6 +775,30 @@ func TestResendPartnerPostsLeadDataAndWritesDispatch(t *testing.T) {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+type stubLeadSK struct {
+	callID string
+	body   []byte
+	err    error
+}
+
+func (s *stubLeadSK) SendLead(context.Context, port.SkorozvonLead) (port.SkorozvonSendResult, error) {
+	return port.SkorozvonSendResult{}, nil
+}
+func (s *stubLeadSK) DeleteLead(context.Context, int) error { return nil }
+func (s *stubLeadSK) CheckProject(context.Context, int64) bool {
+	return true
+}
+func (s *stubLeadSK) ListCustomFields(context.Context) ([]port.SkorozvonCustomField, error) {
+	return nil, nil
+}
+func (s *stubLeadSK) ListCallProjects(context.Context) ([]port.SkorozvonCallProject, error) {
+	return nil, nil
+}
+func (s *stubLeadSK) DownloadCallRecording(_ context.Context, callID string) ([]byte, string, error) {
+	s.callID = callID
+	return s.body, "audio/mpeg", s.err
+}
 
 func TestResendPartnerRequiresWebhook(t *testing.T) {
 	leads := &stubLeadGet{detail: entity.LeadDetail{ID: 7, Phone: "79001234567"}}

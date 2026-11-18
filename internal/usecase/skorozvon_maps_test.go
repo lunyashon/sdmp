@@ -25,10 +25,17 @@ func (s stubSkorozvonMapsAPI) CheckProject(context.Context, int64) bool {
 func (s stubSkorozvonMapsAPI) ListCustomFields(context.Context) ([]port.SkorozvonCustomField, error) {
 	return s.fields, s.err
 }
+func (s stubSkorozvonMapsAPI) ListCallProjects(context.Context) ([]port.SkorozvonCallProject, error) {
+	return nil, nil
+}
+func (s stubSkorozvonMapsAPI) DownloadCallRecording(context.Context, string) ([]byte, string, error) {
+	return nil, "", nil
+}
 
 type stubSkorozvonMapsRepo struct {
-	got []entity.SkorozvonMap
-	err error
+	got    []entity.SkorozvonMap
+	fields []entity.SkorozvonMap
+	err    error
 }
 
 func (s *stubSkorozvonMapsRepo) ReplaceAll(_ context.Context, rows []entity.SkorozvonMap) error {
@@ -38,6 +45,12 @@ func (s *stubSkorozvonMapsRepo) ReplaceAll(_ context.Context, rows []entity.Skor
 
 func (s *stubSkorozvonMapsRepo) Get(context.Context, int64, int64) (entity.SkorozvonMap, bool, error) {
 	return entity.SkorozvonMap{}, false, nil
+}
+func (s *stubSkorozvonMapsRepo) ListFields(context.Context) ([]entity.SkorozvonMap, error) {
+	return s.fields, nil
+}
+func (s *stubSkorozvonMapsRepo) SetBitrixCodes(context.Context, []entity.SkorozvonMap) error {
+	return nil
 }
 
 func TestSyncSkorozvonMapsStoresFieldsAndOptions(t *testing.T) {
@@ -92,6 +105,9 @@ func TestBitrixCodeForSkorozvonName(t *testing.T) {
 	if got := bitrixCodeForSkorozvonName("Название компании"); got != "" {
 		t.Fatalf("company %q", got)
 	}
+	if got := bitrixCodeForSkorozvonName("База"); got != "" {
+		t.Fatalf("base %q", got)
+	}
 }
 
 func TestSyncSkorozvonMapsRejectsEmpty(t *testing.T) {
@@ -129,5 +145,27 @@ func TestNextSkorozvonMapsAt(t *testing.T) {
 		if !got.After(now) {
 			t.Fatalf("%s not after %s", got, now)
 		}
+	}
+}
+
+func TestSkorozvonCustomFieldsFromMap(t *testing.T) {
+	repo := &stubSkorozvonMapsRepo{fields: []entity.SkorozvonMap{
+		{FieldID: 50000027210, Name: "UUID", SourceKey: "uuid", FieldType: "text"},
+		{FieldID: 50000007375, Name: "База", SourceKey: "cold_label", FieldType: "text"},
+		{FieldID: 50000011885, Name: "Дубликат", SourceKey: "zarya", FieldType: "text"},
+		{FieldID: 50000011003, Name: "ID лида Б24", SourceKey: "lead_id", FieldType: "text"},
+		{FieldID: 50000007469, Name: "Номер проекта", SourceKey: "source_description", FieldType: "text"},
+		{FieldID: 50000007334, Name: "Телефоны", SourceKey: "phone", FieldType: "phones"},
+	}}
+	svc := NewWorkerService(nil, nil, nil, nil, nil, nil, nil, 1).WithSkorozvonMaps(repo)
+	got := svc.skorozvonCustomFields(context.Background(), entity.LeadForSkorozvon{
+		ID: 42, UUID: "u-1", Phone: "79001234567", ColdLabel: "ВР", Zarya: "Чистый",
+		SourceDescription: "кампания-17",
+	})
+	if got["FIELD_50000027210"] != "u-1" || got["FIELD_50000007375"] != "ВР" || got["FIELD_50000011885"] != "Чистый" || got["FIELD_50000011003"] != "42" || got["FIELD_50000007469"] != "кампания-17" {
+		t.Fatalf("%+v", got)
+	}
+	if _, ok := got["FIELD_50000007334"]; ok {
+		t.Fatalf("phones must stay native: %+v", got)
 	}
 }

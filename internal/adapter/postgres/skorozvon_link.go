@@ -165,6 +165,17 @@ func (r *SkorozvonLinkRepo) Update(ctx context.Context, in entity.SkorozvonLink)
 	return r.Get(ctx, in.ID)
 }
 
+func (r *SkorozvonLinkRepo) Delete(ctx context.Context, id int) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM skorozvon_link WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete skorozvon link: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: skorozvon link %d", domain.ErrNotFound, id)
+	}
+	return nil
+}
+
 func (r *SkorozvonLinkRepo) replaceMembers(ctx context.Context, linkID int, sources, regions []int) error {
 	if _, err := r.pool.Exec(ctx, `DELETE FROM skorozvon_link_source WHERE link_id = $1`, linkID); err != nil {
 		return err

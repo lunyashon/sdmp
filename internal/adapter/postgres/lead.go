@@ -31,6 +31,13 @@ func NewLeadRepo(pool *pgxpool.Pool) *LeadRepo {
 }
 
 func (r *LeadRepo) InsertAccepted(ctx context.Context, row entity.LeadRow, outbox entity.OutboxMessage) (int64, error) {
+	phoneValue := strings.TrimSpace(row.Phone)
+	phoneValid := false
+	if normalized, ok := phone.Normalize(phoneValue); ok {
+		phoneValue = normalized
+		phoneValid = true
+	}
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin accept txn: %w", err)
@@ -39,10 +46,10 @@ func (r *LeadRepo) InsertAccepted(ctx context.Context, row entity.LeadRow, outbo
 
 	var id int64
 	err = tx.QueryRow(ctx, `
-		INSERT INTO lead_row (uuid, phone, source_id, web_id, status_id, s3_key, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO lead_row (uuid, phone, phone_valid, source_id, web_id, status_id, s3_key, source_description, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
-	`, row.UUID, row.Phone, row.SourceID, nilIfEmpty(row.WebID), row.StatusID, row.S3Key, row.CreatedAt).Scan(&id)
+	`, row.UUID, phoneValue, phoneValid, row.SourceID, nilIfEmpty(row.WebID), row.StatusID, row.S3Key, nilIfEmpty(row.SourceDescription), row.CreatedAt).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert lead_row: %w", err)
 	}
@@ -63,6 +70,103 @@ func (r *LeadRepo) InsertAccepted(ctx context.Context, row entity.LeadRow, outbo
 		return 0, fmt.Errorf("commit accept txn: %w", err)
 	}
 	return id, nil
+}
+
+var importLeadColumns = map[string]string{
+	"uuid": "text", "phone": "text", "phone_valid": "bool",
+	"source_id": "int", "child_source_id": "int", "region_id": "int",
+	"region_source": "int16", "city": "text", "operator_id": "int",
+	"operator_source": "int16", "operator_raw": "text", "web_id": "text",
+	"tag": "text", "call_result": "int64", "call_result_name": "text",
+	"call_id": "text", "call_url": "text", "call_last_at": "time",
+	"project_num": "text", "call_form": "text", "status_id": "int16",
+	"s3_key": "text", "archived_at": "time", "created_at": "time",
+	"updated_at": "time", "legacy_fields": "text", "bitrix_lead_id": "text",
+	"cold_label": "text", "base_label": "text", "source_description": "text",
+	"skorozvon_lead_id": "text", "skorozvon_anketa_id": "int64", "via_us": "bool",
+}
+
+func (r *LeadRepo) InsertImport(ctx context.Context, in entity.LeadImportRow) error {
+	if strings.TrimSpace(in.UUID) == "" || strings.TrimSpace(in.Phone) == "" {
+		return fmt.Errorf("insert import: uuid and phone required")
+	}
+	if in.SourceID <= 0 || strings.TrimSpace(in.Payload) == "" {
+		return fmt.Errorf("insert import: source_id and payload required")
+	}
+
+	cols := make([]string, 0, 8)
+	args := make([]any, 0, 8)
+	seen := map[string]bool{}
+	add := func(col string, val any) {
+		if seen[col] {
+			return
+		}
+		seen[col] = true
+		cols = append(cols, col)
+		args = append(args, val)
+	}
+	add("uuid", in.UUID)
+	add("phone", in.Phone)
+	add("phone_valid", in.PhoneValid)
+	for col, val := range in.Values {
+		kind, ok := importLeadColumns[col]
+		if !ok || col == "uuid" || col == "phone" || col == "phone_valid" {
+			continue
+		}
+		if val == nil {
+			continue
+		}
+		if col == "child_source_id" {
+			continue
+		}
+		if kind == "text" {
+			if s, ok := val.(string); ok && strings.TrimSpace(s) == "" {
+				continue
+			}
+		}
+		add(col, val)
+	}
+	add("source_id", in.SourceID)
+	if !seen["status_id"] {
+		add("status_id", entity.StatusAccepted)
+	}
+	if !seen["created_at"] {
+		add("created_at", clock.Now())
+	}
+
+	placeholders := make([]string, len(args))
+	for i := range args {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin import txn: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	q := fmt.Sprintf(
+		`INSERT INTO lead_row (%s) VALUES (%s) RETURNING id`,
+		strings.Join(cols, ", "),
+		strings.Join(placeholders, ", "),
+	)
+	var leadID int64
+	if err := tx.QueryRow(ctx, q, args...).Scan(&leadID); err != nil {
+		return fmt.Errorf("insert import lead_row: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO outbox (lead_row_id, source_id, payload, created_at)
+		VALUES ($1, $2, $3, $4)
+	`, leadID, in.SourceID, in.Payload, clock.Now()); err != nil {
+		return fmt.Errorf("insert outbox: %w", err)
+	}
+	if err := insertLeadEvent(ctx, tx, leadID, entity.EventAccepted, entity.EventSourceAPI, ""); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit import txn: %w", err)
+	}
+	return nil
 }
 
 func (r *LeadRepo) UpdateEnrichment(ctx context.Context, leadID int64, in entity.LeadEnrichment) error {
@@ -115,6 +219,42 @@ func (r *LeadRepo) BindBitrix(ctx context.Context, leadUUID, bitrixLeadID string
 	return nil
 }
 
+// resolveSkorozvonLeadSQL — lead_row.id по любому id СК ($1).
+// Сначала наша заявка (via_us), иначе оригинал с тем же телефоном, иначе клон.
+const resolveSkorozvonLeadSQL = `
+	SELECT id FROM (
+		SELECT COALESCE(
+			(SELECT lr.id
+			 FROM lead_skorozvon ls
+			 JOIN lead_row lr ON lr.id = ls.lead_row_id
+			 WHERE ls.skorozvon_lead_id = $1 AND lr.via_us
+			 LIMIT 1),
+			(SELECT id FROM lead_row WHERE skorozvon_lead_id = $1 AND via_us LIMIT 1),
+			(SELECT orig.id
+			 FROM lead_row clone
+			 JOIN lead_row orig
+			   ON orig.via_us
+			  AND orig.phone = clone.phone
+			  AND COALESCE(btrim(clone.phone), '') <> ''
+			 WHERE NOT clone.via_us
+			   AND clone.id IN (
+					SELECT lead_row_id FROM lead_skorozvon WHERE skorozvon_lead_id = $1
+					UNION ALL
+					SELECT id FROM lead_row WHERE skorozvon_lead_id = $1
+			   )
+			   AND (
+					EXISTS (SELECT 1 FROM lead_skorozvon ls WHERE ls.lead_row_id = orig.id)
+					OR COALESCE(btrim(orig.skorozvon_lead_id), '') <> ''
+			   )
+			 ORDER BY orig.id DESC
+			 LIMIT 1),
+			(SELECT lead_row_id FROM lead_skorozvon WHERE skorozvon_lead_id = $1 LIMIT 1),
+			(SELECT id FROM lead_row WHERE skorozvon_lead_id = $1 LIMIT 1)
+		) AS id
+	) s
+	WHERE id IS NOT NULL
+`
+
 func (r *LeadRepo) BindSkorozvon(ctx context.Context, leadID int64, skorozvonLeadID, projectID string) error {
 	_, err := r.pool.Exec(ctx, `
 		WITH upd AS (
@@ -125,6 +265,13 @@ func (r *LeadRepo) BindSkorozvon(ctx context.Context, leadID int64, skorozvonLea
 			    updated_at = now()
 			WHERE id = $1
 			RETURNING id
+		),
+		mapped AS (
+			INSERT INTO lead_skorozvon (skorozvon_lead_id, lead_row_id, project_id)
+			SELECT NULLIF($2, ''), id, NULLIF($3, '')
+			FROM upd
+			WHERE NULLIF($2, '') IS NOT NULL
+			ON CONFLICT (skorozvon_lead_id) DO NOTHING
 		)
 		INSERT INTO event (lead_row_id, event_type_id, occurred_at, source, details)
 		SELECT id, $5, now(), $6, NULLIF($2, '') FROM upd
@@ -133,6 +280,230 @@ func (r *LeadRepo) BindSkorozvon(ctx context.Context, leadID int64, skorozvonLea
 		return fmt.Errorf("bind skorozvon: %w", err)
 	}
 	return nil
+}
+
+func (r *LeadRepo) BindCrmcalls(ctx context.Context, leadID int64, contactID, projectID string) error {
+	contactID = strings.TrimSpace(contactID)
+	projectID = strings.TrimSpace(projectID)
+	_, err := r.pool.Exec(ctx, `
+		WITH upd AS (
+			UPDATE lead_row
+			SET status_id = $4, updated_at = now()
+			WHERE id = $1
+			RETURNING id
+		),
+		mapped AS (
+			INSERT INTO lead_crmcalls (contact_id, lead_row_id, project_id)
+			SELECT NULLIF($2, ''), id, NULLIF($3, '')
+			FROM upd
+			WHERE NULLIF($2, '') IS NOT NULL
+			ON CONFLICT (contact_id) DO NOTHING
+		)
+		INSERT INTO event (lead_row_id, event_type_id, occurred_at, source, details)
+		SELECT id, $5, now(), $6, NULLIF($2, '') FROM upd
+	`, leadID, contactID, projectID, entity.StatusInSK, entity.EventInSK, entity.EventSourceWorker)
+	if err != nil {
+		return fmt.Errorf("bind crmcalls: %w", err)
+	}
+	return nil
+}
+
+func (r *LeadRepo) HasCrmcallsSent(ctx context.Context, leadID int64, projectID string) (bool, error) {
+	projectID = strings.TrimSpace(projectID)
+	if leadID <= 0 || projectID == "" {
+		return false, nil
+	}
+	var ok bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM dispatch
+			WHERE lead_row_id = $1
+			  AND channel_id = $3
+			  AND sent_ok
+			  AND skorozvon_project_id = $2
+		) OR EXISTS (
+			SELECT 1 FROM lead_crmcalls
+			WHERE lead_row_id = $1
+			  AND project_id = $2
+		)
+	`, leadID, projectID, entity.ChannelCrmcalls).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("has crmcalls sent: %w", err)
+	}
+	return ok, nil
+}
+
+func (r *LeadRepo) ApplyCrmcallsPostback(ctx context.Context, in entity.CrmcallsPostback) error {
+	id := strings.TrimSpace(in.ID)
+	phoneVal := strings.TrimSpace(in.Phone)
+	if n, ok := phone.Normalize(phoneVal); ok {
+		phoneVal = n
+	}
+	result := strings.TrimSpace(in.Result)
+	if id == "" && phoneVal == "" {
+		return fmt.Errorf("%w: id or phone is required", domain.ErrInvalidInput)
+	}
+
+	var leadID int64
+	var leadUUID string
+	err := r.pool.QueryRow(ctx, `
+		SELECT lr.id, lr.uuid
+		FROM lead_row lr
+		WHERE (
+			($1 <> '' AND lr.uuid = $1)
+			OR ($1 <> '' AND lr.id::text = $1)
+			OR ($1 <> '' AND EXISTS (
+				SELECT 1 FROM lead_crmcalls c WHERE c.lead_row_id = lr.id AND c.contact_id = $1
+			))
+			OR ($2 <> '' AND lr.phone = $2 AND lr.via_us)
+		)
+		ORDER BY
+			CASE
+				WHEN $1 <> '' AND lr.uuid = $1 THEN 0
+				WHEN $1 <> '' AND lr.id::text = $1 THEN 1
+				WHEN $1 <> '' AND EXISTS (
+					SELECT 1 FROM lead_crmcalls c WHERE c.lead_row_id = lr.id AND c.contact_id = $1
+				) THEN 2
+				ELSE 3
+			END,
+			lr.id DESC
+		LIMIT 1
+	`, id, phoneVal).Scan(&leadID, &leadUUID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		return fmt.Errorf("resolve crmcalls postback: %w", err)
+	}
+
+	name := entity.UsableSkorozvonName(in.Name)
+	callForm := ""
+	if name != "" {
+		var current string
+		_ = r.pool.QueryRow(ctx, `SELECT COALESCE(call_form, '') FROM lead_row WHERE id = $1`, leadID).Scan(&current)
+		callForm = mergeCallFormImya(current, name)
+	}
+
+	callID := strings.TrimSpace(in.CallID)
+	callURL := strings.TrimSpace(in.CallURL)
+	if _, err := r.pool.Exec(ctx, `
+		UPDATE lead_row
+		SET call_result_name = COALESCE(NULLIF($2, ''), call_result_name),
+		    call_form = COALESCE(NULLIF($3, ''), call_form),
+		    call_id = COALESCE(NULLIF($4, ''), call_id),
+		    call_url = COALESCE(NULLIF($5, ''), call_url),
+		    call_last_at = COALESCE($6, call_last_at),
+		    updated_at = now()
+		WHERE id = $1
+	`, leadID, result, callForm, callID, callURL, in.CallLastAt); err != nil {
+		return fmt.Errorf("apply crmcalls result: %w", err)
+	}
+
+	if id != "" && id != leadUUID {
+		if _, err := r.pool.Exec(ctx, `
+			INSERT INTO lead_crmcalls (contact_id, lead_row_id)
+			VALUES ($1, $2)
+			ON CONFLICT (contact_id) DO NOTHING
+		`, id, leadID); err != nil {
+			return fmt.Errorf("map crmcalls contact: %w", err)
+		}
+	}
+
+	if !crmcallsTransferred(result) {
+		return nil
+	}
+	return r.enqueueBx24LeadID(ctx, leadID)
+}
+
+func crmcallsTransferred(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "передан лид", "заказ/лид":
+		return true
+	default:
+		return false
+	}
+}
+
+func mergeCallFormImya(raw, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return strings.TrimSpace(raw)
+	}
+	m := map[string]any{}
+	if s := strings.TrimSpace(raw); s != "" {
+		if err := json.Unmarshal([]byte(s), &m); err != nil || m == nil {
+			m = map[string]any{}
+		}
+	}
+	m["imya"] = name
+	b, err := json.Marshal(m)
+	if err != nil {
+		return strings.TrimSpace(raw)
+	}
+	return string(b)
+}
+
+func (r *LeadRepo) enqueueBx24LeadID(ctx context.Context, leadID int64) error {
+	outboxID, err := id.NewUUID()
+	if err != nil {
+		return fmt.Errorf("outbox_bx24 id: %w", err)
+	}
+	_, err = r.pool.Exec(ctx, `
+		WITH lead AS (
+			SELECT id, uuid
+			FROM lead_row
+			WHERE id = $1
+			  AND via_us
+			  AND COALESCE(bitrix_lead_id, '') = ''
+		),
+		upd AS (
+			UPDATE lead_row lr
+			SET status_id = $2, updated_at = now()
+			FROM lead
+			WHERE lr.id = lead.id
+			RETURNING lr.id, lr.uuid
+		),
+		queued AS (
+			INSERT INTO outbox_bx24 (uuid, uuid_lead, locked_until)
+			SELECT $3, uuid, NULL
+			FROM upd
+			ON CONFLICT (uuid_lead) DO NOTHING
+			RETURNING uuid_lead
+		)
+		INSERT INTO event (lead_row_id, event_type_id, occurred_at, source)
+		SELECT id, $4, now(), $5
+		FROM upd
+		JOIN queued ON queued.uuid_lead = upd.uuid
+	`, leadID, entity.StatusFromSK, outboxID, entity.EventFromSK, entity.EventSourceSK)
+	if err != nil {
+		return fmt.Errorf("enqueue bx24 from crmcalls: %w", err)
+	}
+	return nil
+}
+
+func (r *LeadRepo) HasSkorozvonSent(ctx context.Context, leadID int64, projectID string) (bool, error) {
+	projectID = strings.TrimSpace(projectID)
+	if leadID <= 0 || projectID == "" {
+		return false, nil
+	}
+	var ok bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM dispatch
+			WHERE lead_row_id = $1
+			  AND channel_id = $3
+			  AND sent_ok
+			  AND skorozvon_project_id = $2
+		) OR EXISTS (
+			SELECT 1 FROM lead_skorozvon
+			WHERE lead_row_id = $1
+			  AND project_id = $2
+		)
+	`, leadID, projectID, entity.ChannelSkorozvon).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("has skorozvon sent: %w", err)
+	}
+	return ok, nil
 }
 
 func (r *LeadRepo) ApplyCallResult(ctx context.Context, skorozvonLeadID string, in entity.LeadCallResult) error {
@@ -145,7 +516,7 @@ func (r *LeadRepo) ApplyCallResult(ctx context.Context, skorozvonLeadID string, 
 		    call_result_name = COALESCE(NULLIF($7, ''), call_result_name),
 		    project_num = COALESCE(NULLIF($6, ''), project_num),
 		    updated_at = now()
-		WHERE skorozvon_lead_id = $1
+		WHERE id = (`+resolveSkorozvonLeadSQL+`)
 	`, skorozvonLeadID, in.CallID, in.CallURL, in.CallLastAt, in.CallResult, in.ProjectNum, in.CallResultName)
 	if err != nil {
 		return fmt.Errorf("apply call result: %w", err)
@@ -164,13 +535,13 @@ func (r *LeadRepo) UpdateSkorozvonGeo(ctx context.Context, skorozvonLeadID strin
 	_, err := r.pool.Exec(ctx, `
 		UPDATE lead_row
 		SET city = COALESCE(NULLIF(btrim(city), ''), NULLIF($2, '')),
-		    region_id = COALESCE(region_id, $3),
+		    region_id = COALESCE($3, region_id),
 		    region_source = CASE
-		        WHEN region_id IS NULL AND $3 IS NOT NULL THEN $4
+		        WHEN $3 IS NOT NULL THEN $4
 		        ELSE region_source
 		    END,
 		    updated_at = now()
-		WHERE skorozvon_lead_id = $1
+		WHERE id = (`+resolveSkorozvonLeadSQL+`)
 	`, skorozvonLeadID, city, in.RegionID, in.RegionSource)
 	if err != nil {
 		return fmt.Errorf("update skorozvon geo: %w", err)
@@ -189,7 +560,7 @@ func (r *LeadRepo) ReplaceSkorozvonAnketaFields(ctx context.Context, skorozvonLe
 	defer tx.Rollback(ctx)
 
 	var leadRowID int64
-	err = tx.QueryRow(ctx, `SELECT id FROM lead_row WHERE skorozvon_lead_id = $1 LIMIT 1`, skorozvonLeadID).Scan(&leadRowID)
+	err = tx.QueryRow(ctx, resolveSkorozvonLeadSQL, skorozvonLeadID).Scan(&leadRowID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("replace skorozvon anketa fields: lead not found")
@@ -200,13 +571,21 @@ func (r *LeadRepo) ReplaceSkorozvonAnketaFields(ctx context.Context, skorozvonLe
 		return fmt.Errorf("delete skorozvon anketa fields: %w", err)
 	}
 	for _, f := range fields {
-		if f.FieldID <= 0 || f.EnumID <= 0 {
+		if f.FieldID <= 0 {
 			continue
 		}
+		text := strings.TrimSpace(f.ValueText)
+		if f.EnumID <= 0 && text == "" {
+			continue
+		}
+		enumID := f.EnumID
+		if enumID < 0 {
+			enumID = 0
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO skorozvon_anketa_fields (lead_row_id, skorozvon_lead_id, field_id, enum_id)
-			VALUES ($1, $2, $3, $4)
-		`, leadRowID, skorozvonLeadID, f.FieldID, f.EnumID); err != nil {
+			INSERT INTO skorozvon_anketa_fields (lead_row_id, skorozvon_lead_id, field_id, enum_id, value_text)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''))
+		`, leadRowID, skorozvonLeadID, f.FieldID, enumID, text); err != nil {
 			return fmt.Errorf("insert skorozvon anketa field: %w", err)
 		}
 	}
@@ -228,10 +607,11 @@ func (r *LeadRepo) EnqueueBx24(ctx context.Context, skorozvonLeadID string) erro
 	var leadUUID string
 	err = r.pool.QueryRow(ctx, `
 		WITH lead AS (
-			SELECT id, uuid
-			FROM lead_row
-			WHERE skorozvon_lead_id = $1
-			  AND COALESCE(bitrix_lead_id, '') = ''
+			SELECT lr.id, lr.uuid
+			FROM lead_row lr
+			WHERE lr.id = (`+resolveSkorozvonLeadSQL+`)
+			  AND lr.via_us
+			  AND COALESCE(lr.bitrix_lead_id, '') = ''
 		),
 		upd AS (
 			UPDATE lead_row lr
@@ -277,7 +657,9 @@ func (r *LeadRepo) ApplyFormResponse(ctx context.Context, skorozvonLeadID string
 	var leadUUID string
 	err = r.pool.QueryRow(ctx, `
 		WITH lead AS (
-			SELECT id, uuid, via_us FROM lead_row WHERE skorozvon_lead_id = $1
+			SELECT lr.id, lr.uuid, lr.via_us
+			FROM lead_row lr
+			WHERE lr.id = (`+resolveSkorozvonLeadSQL+`)
 		),
 		ins AS (
 			INSERT INTO skorozvon_anketa (
@@ -338,6 +720,35 @@ func (r *LeadRepo) InsertFromSkorozvon(ctx context.Context, in entity.LeadFromSk
 		created = created.In(clock.Location)
 	}
 
+	var existingID int64
+	err = r.pool.QueryRow(ctx, resolveSkorozvonLeadSQL, skorozvonLeadID).Scan(&existingID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("lookup skorozvon lead: %w", err)
+	}
+	if err == nil {
+		return mapSkorozvonLead(ctx, r.pool, skorozvonLeadID, existingID, "")
+	}
+	if phoneValid {
+		err = r.pool.QueryRow(ctx, `
+			SELECT id
+			FROM lead_row
+			WHERE via_us
+			  AND phone = $1
+			  AND (
+			    EXISTS (SELECT 1 FROM lead_skorozvon ls WHERE ls.lead_row_id = lead_row.id)
+			    OR COALESCE(btrim(skorozvon_lead_id), '') <> ''
+			  )
+			ORDER BY id DESC
+			LIMIT 1
+		`, phoneVal).Scan(&existingID)
+		if err == nil {
+			return mapSkorozvonLead(ctx, r.pool, skorozvonLeadID, existingID, "")
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("lookup skorozvon lead by phone: %w", err)
+		}
+	}
+
 	var leadID int64
 	err = r.pool.QueryRow(ctx, `
 		INSERT INTO lead_row (
@@ -356,7 +767,31 @@ func (r *LeadRepo) InsertFromSkorozvon(ctx context.Context, in entity.LeadFromSk
 		}
 		return fmt.Errorf("insert lead from skorozvon: %w", err)
 	}
+	if err := mapSkorozvonLead(ctx, r.pool, skorozvonLeadID, leadID, ""); err != nil {
+		return err
+	}
 	return insertLeadEvent(ctx, r.pool, leadID, entity.EventFromSK, entity.EventSourceSK, skorozvonLeadID)
+}
+
+func mapSkorozvonLead(ctx context.Context, exec interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}, skorozvonLeadID string, leadID int64, projectID string) error {
+	_, err := exec.Exec(ctx, `
+		INSERT INTO lead_skorozvon (skorozvon_lead_id, lead_row_id, project_id)
+		VALUES ($1, $2, NULLIF($3, ''))
+		ON CONFLICT (skorozvon_lead_id) DO UPDATE SET
+			lead_row_id = EXCLUDED.lead_row_id,
+			project_id = COALESCE(NULLIF(EXCLUDED.project_id, ''), lead_skorozvon.project_id)
+		WHERE EXISTS (
+			SELECT 1 FROM lead_row n WHERE n.id = EXCLUDED.lead_row_id AND n.via_us
+		) AND NOT EXISTS (
+			SELECT 1 FROM lead_row o WHERE o.id = lead_skorozvon.lead_row_id AND o.via_us
+		)
+	`, skorozvonLeadID, leadID, projectID)
+	if err != nil {
+		return fmt.Errorf("map skorozvon lead: %w", err)
+	}
+	return nil
 }
 
 func (r *LeadRepo) InsertDispatch(ctx context.Context, in entity.Dispatch) error {
@@ -366,12 +801,15 @@ func (r *LeadRepo) InsertDispatch(ctx context.Context, in entity.Dispatch) error
 			VALUES ($1, $2, $3, NULLIF($4, ''), now(), $5, $6, $7, NULLIF($8, ''))
 			ON CONFLICT (lead_row_id, channel_id, skorozvon_project_id) WHERE skorozvon_project_id IS NOT NULL
 			DO UPDATE SET
-				sent_at = EXCLUDED.sent_at,
-				sent_ok = EXCLUDED.sent_ok,
-				external_id = EXCLUDED.external_id,
+				sent_at = CASE WHEN dispatch.sent_ok THEN dispatch.sent_at ELSE EXCLUDED.sent_at END,
+				sent_ok = dispatch.sent_ok OR EXCLUDED.sent_ok,
+				external_id = CASE
+					WHEN dispatch.sent_ok AND COALESCE(btrim(dispatch.external_id), '') <> '' THEN dispatch.external_id
+					ELSE EXCLUDED.external_id
+				END,
 				attempts = EXCLUDED.attempts,
-				http_status = EXCLUDED.http_status,
-				raw_response = EXCLUDED.raw_response
+				http_status = CASE WHEN dispatch.sent_ok THEN dispatch.http_status ELSE EXCLUDED.http_status END,
+				raw_response = CASE WHEN dispatch.sent_ok THEN dispatch.raw_response ELSE EXCLUDED.raw_response END
 		`, in.LeadRowID, in.ChannelID, in.SkorozvonProjectID, in.ExternalID, in.SentOK, in.Attempts, in.HTTPStatus, in.RawResponse)
 		if err != nil {
 			return fmt.Errorf("insert skorozvon dispatch: %w", err)
@@ -380,16 +818,20 @@ func (r *LeadRepo) InsertDispatch(ctx context.Context, in entity.Dispatch) error
 	}
 
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO dispatch (lead_row_id, channel_id, upk_id, sent_at, sent_ok, attempts, http_status, raw_response)
-		VALUES ($1, $2, $3, now(), $4, $5, $6, NULLIF($7, ''))
+		INSERT INTO dispatch (lead_row_id, channel_id, upk_id, external_id, sent_at, sent_ok, attempts, http_status, raw_response)
+		VALUES ($1, $2, $3, NULLIF($4, ''), now(), $5, $6, $7, NULLIF($8, ''))
 		ON CONFLICT (lead_row_id, channel_id, upk_id) WHERE upk_id IS NOT NULL
 		DO UPDATE SET
 			sent_at = EXCLUDED.sent_at,
 			sent_ok = EXCLUDED.sent_ok,
+			external_id = CASE
+				WHEN COALESCE(btrim(dispatch.external_id), '') <> '' THEN dispatch.external_id
+				ELSE EXCLUDED.external_id
+			END,
 			attempts = EXCLUDED.attempts,
 			http_status = EXCLUDED.http_status,
 			raw_response = EXCLUDED.raw_response
-	`, in.LeadRowID, in.ChannelID, in.UPKID, in.SentOK, in.Attempts, in.HTTPStatus, in.RawResponse)
+	`, in.LeadRowID, in.ChannelID, in.UPKID, in.ExternalID, in.SentOK, in.Attempts, in.HTTPStatus, in.RawResponse)
 	if err != nil {
 		return fmt.Errorf("insert dispatch: %w", err)
 	}
@@ -413,6 +855,27 @@ func (r *LeadRepo) SaveZaryaResult(ctx context.Context, leadID int64, duplicate 
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("save zarya result: provider or value %q not found", name)
+	}
+	return nil
+}
+
+func (r *LeadRepo) SaveZaryaOldResult(ctx context.Context, leadID int64, duplicate bool) error {
+	name := "Чистый"
+	if duplicate {
+		name = "дубль"
+	}
+	tag, err := r.pool.Exec(ctx, `
+		INSERT INTO dedup_result (lead_row_id, provider_id, value_id, checked_at)
+		SELECT $1, p.id, v.id, now()
+		FROM dedup_provider p
+		JOIN dedup_value v ON v.provider_id = p.id AND v.name = $2
+		WHERE lower(p.name) IN ('заря старая', 'zarya_old')
+	`, leadID, name)
+	if err != nil {
+		return fmt.Errorf("save zarya old result: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("save zarya old result: provider or value %q not found", name)
 	}
 	return nil
 }
@@ -461,12 +924,14 @@ SELECT
 	COALESCE(u.name, ''),
 	lr.phone,
 	COALESCE(z.name, ''),
+	COALESCE(zo.name, ''),
 	COALESCE(lr.tag, ''),
 	COALESCE(lr.web_id, ''),
 	COALESCE(lr.project_num, ''),
 	COALESCE(lr.call_id, ''),
 	COALESCE(lr.call_url, ''),
-	lr.via_us
+	lr.via_us,
+	%s
 FROM page
 JOIN lead_row lr ON lr.id = page.id
 LEFT JOIN source ps ON ps.id = lr.source_id
@@ -491,8 +956,18 @@ LEFT JOIN LATERAL (
 	ORDER BY dr.checked_at DESC
 	LIMIT 1
 ) z ON true
+LEFT JOIN LATERAL (
+	SELECT dv.name
+	FROM dedup_result dr
+	JOIN dedup_value dv ON dv.id = dr.value_id
+	WHERE dr.lead_row_id = lr.id
+	  AND dr.provider_id IN (SELECT p.id FROM dedup_provider p WHERE lower(p.name) IN ('заря старая', 'zarya_old'))
+	ORDER BY dr.checked_at DESC
+	LIMIT 1
+) zo ON true
+%s
 ORDER BY lr.created_at DESC
-`, leadListSourceJoin(f), where, lim, off)
+`, leadListSourceJoin(f), where, lim, off, leadListSkSelect(f), leadListSkJoin(f))
 
 	rows, err := r.pool.Query(ctx, listSQL, args...)
 	if err != nil {
@@ -522,18 +997,84 @@ ORDER BY lr.created_at DESC
 			&item.UPK,
 			&item.Phone,
 			&item.Zarya,
+			&item.ZaryaOld,
 			&item.Tag,
 			&item.WebID,
 			&item.ProjectNum,
 			&item.CallID,
 			&item.CallURL,
 			&item.ViaUs,
+			&item.SkSentOK,
+			&item.SkHTTPStatus,
+			&item.SkError,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan lead: %w", err)
 		}
 		out = append(out, item)
 	}
 	return out, total, rows.Err()
+}
+
+func (r *LeadRepo) ListSkDispatch(ctx context.Context, ids []int64) ([]entity.LeadSkDispatch, error) {
+	if len(ids) == 0 {
+		return []entity.LeadSkDispatch{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+SELECT DISTINCT ON (d.lead_row_id)
+	d.lead_row_id,
+	d.sent_ok,
+	d.http_status,
+	LEFT(COALESCE(d.raw_response, ''), 500)
+FROM dispatch d
+WHERE d.channel_id = $1 AND d.lead_row_id = ANY($2)
+ORDER BY d.lead_row_id, d.sent_at DESC
+`, entity.ChannelSkorozvon, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list skorozvon dispatch: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]entity.LeadSkDispatch, 0, len(ids))
+	for rows.Next() {
+		var item entity.LeadSkDispatch
+		if err := rows.Scan(&item.LeadRowID, &item.SentOK, &item.HTTPStatus, &item.Error); err != nil {
+			return nil, fmt.Errorf("scan skorozvon dispatch: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (r *LeadRepo) ListSkResend(ctx context.Context, ids []int64) ([]entity.LeadSkResend, error) {
+	if len(ids) == 0 {
+		return []entity.LeadSkResend{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+SELECT lr.id, lr.uuid, COALESCE(d.skorozvon_project_id, '')
+FROM lead_row lr
+LEFT JOIN LATERAL (
+	SELECT skorozvon_project_id
+	FROM dispatch
+	WHERE lead_row_id = lr.id AND channel_id = $2
+	ORDER BY sent_at DESC
+	LIMIT 1
+) d ON true
+WHERE lr.id = ANY($1)
+`, ids, entity.ChannelSkorozvon)
+	if err != nil {
+		return nil, fmt.Errorf("list skorozvon resend: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]entity.LeadSkResend, 0, len(ids))
+	for rows.Next() {
+		var item entity.LeadSkResend
+		if err := rows.Scan(&item.ID, &item.UUID, &item.ProjectID); err != nil {
+			return nil, fmt.Errorf("scan skorozvon resend: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (r *LeadRepo) CountBySource(ctx context.Context, from, to time.Time) ([]entity.LeadSourceCount, error) {
@@ -681,6 +1222,85 @@ func (r *LeadRepo) CountSkorozvonBitrixBySource(ctx context.Context, from, to ti
 	return out, rows.Err()
 }
 
+func (r *LeadRepo) CountOutgoingDispatch(ctx context.Context, from, to time.Time) (entity.LeadOutgoingStats, error) {
+	out := entity.LeadOutgoingStats{
+		Partners:  []entity.LeadPartnerDispatchCount{},
+		Skorozvon: []entity.LeadSkorozvonDispatchCount{},
+		Crmcalls:  []entity.LeadSkorozvonDispatchCount{},
+	}
+	partnerRows, err := r.pool.Query(ctx, `
+		SELECT upk_id, COUNT(*)::int
+		FROM dispatch
+		WHERE channel_id = $3
+		  AND upk_id IS NOT NULL
+		  AND sent_ok
+		  AND sent_at >= $1 AND sent_at <= $2
+		GROUP BY upk_id
+	`, from, to, entity.ChannelPartner)
+	if err != nil {
+		return entity.LeadOutgoingStats{}, fmt.Errorf("count partner dispatch: %w", err)
+	}
+	defer partnerRows.Close()
+	for partnerRows.Next() {
+		var item entity.LeadPartnerDispatchCount
+		if err := partnerRows.Scan(&item.PartnerID, &item.Count); err != nil {
+			return entity.LeadOutgoingStats{}, fmt.Errorf("scan partner dispatch: %w", err)
+		}
+		out.Partners = append(out.Partners, item)
+	}
+	if err := partnerRows.Err(); err != nil {
+		return entity.LeadOutgoingStats{}, err
+	}
+
+	skRows, err := r.pool.Query(ctx, `
+		SELECT skorozvon_project_id, COUNT(*)::int
+		FROM dispatch
+		WHERE channel_id = $3
+		  AND skorozvon_project_id IS NOT NULL
+		  AND btrim(skorozvon_project_id) <> ''
+		  AND sent_ok
+		  AND sent_at >= $1 AND sent_at <= $2
+		GROUP BY skorozvon_project_id
+	`, from, to, entity.ChannelSkorozvon)
+	if err != nil {
+		return entity.LeadOutgoingStats{}, fmt.Errorf("count skorozvon dispatch: %w", err)
+	}
+	defer skRows.Close()
+	for skRows.Next() {
+		var item entity.LeadSkorozvonDispatchCount
+		if err := skRows.Scan(&item.ProjectID, &item.Count); err != nil {
+			return entity.LeadOutgoingStats{}, fmt.Errorf("scan skorozvon dispatch: %w", err)
+		}
+		out.Skorozvon = append(out.Skorozvon, item)
+	}
+	if err := skRows.Err(); err != nil {
+		return entity.LeadOutgoingStats{}, err
+	}
+
+	ccRows, err := r.pool.Query(ctx, `
+		SELECT skorozvon_project_id, COUNT(*)::int
+		FROM dispatch
+		WHERE channel_id = $3
+		  AND skorozvon_project_id IS NOT NULL
+		  AND btrim(skorozvon_project_id) <> ''
+		  AND sent_ok
+		  AND sent_at >= $1 AND sent_at <= $2
+		GROUP BY skorozvon_project_id
+	`, from, to, entity.ChannelCrmcalls)
+	if err != nil {
+		return entity.LeadOutgoingStats{}, fmt.Errorf("count crmcalls dispatch: %w", err)
+	}
+	defer ccRows.Close()
+	for ccRows.Next() {
+		var item entity.LeadSkorozvonDispatchCount
+		if err := ccRows.Scan(&item.ProjectID, &item.Count); err != nil {
+			return entity.LeadOutgoingStats{}, fmt.Errorf("scan crmcalls dispatch: %w", err)
+		}
+		out.Crmcalls = append(out.Crmcalls, item)
+	}
+	return out, ccRows.Err()
+}
+
 const leadDetailSelect = `
 SELECT
 	lr.id,
@@ -720,6 +1340,7 @@ SELECT
 	lr.created_at,
 	lr.updated_at,
 	COALESCE(z.name, ''),
+	COALESCE(zo.name, ''),
 	COALESCE(u.name, '')
 FROM lead_row lr
 LEFT JOIN source s ON s.id = COALESCE(lr.child_source_id, lr.source_id)
@@ -745,6 +1366,15 @@ LEFT JOIN LATERAL (
 	ORDER BY dr.checked_at DESC
 	LIMIT 1
 ) z ON true
+LEFT JOIN LATERAL (
+	SELECT dv.name
+	FROM dedup_result dr
+	JOIN dedup_value dv ON dv.id = dr.value_id
+	WHERE dr.lead_row_id = lr.id
+	  AND dr.provider_id IN (SELECT p.id FROM dedup_provider p WHERE lower(p.name) IN ('заря старая', 'zarya_old'))
+	ORDER BY dr.checked_at DESC
+	LIMIT 1
+) zo ON true
 `
 
 func (r *LeadRepo) Get(ctx context.Context, id int64) (entity.LeadDetail, error) {
@@ -767,6 +1397,57 @@ func (r *LeadRepo) GetByUUID(ctx context.Context, uuid string) (entity.LeadDetai
 		return entity.LeadDetail{}, err
 	}
 	return d, nil
+}
+
+func (r *LeadRepo) GetForSkorozvon(ctx context.Context, uuid string) (entity.LeadForSkorozvon, error) {
+	uuid = strings.TrimSpace(uuid)
+	if uuid == "" {
+		return entity.LeadForSkorozvon{}, fmt.Errorf("%w: uuid is required", domain.ErrInvalidInput)
+	}
+	var out entity.LeadForSkorozvon
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			lr.id,
+			lr.uuid,
+			COALESCE(lr.phone, ''),
+			lr.child_source_id,
+			COALESCE(reg.name, ''),
+			lr.region_id,
+			COALESCE(z.name, ''),
+			COALESCE(NULLIF(lr.cold_label, ''), cs.cold_label, ps.cold_label, ''),
+			COALESCE(lr.source_description, '')
+		FROM lead_row lr
+		LEFT JOIN region reg ON reg.id = lr.region_id
+		LEFT JOIN source ps ON ps.id = lr.source_id
+		LEFT JOIN source cs ON cs.id = lr.child_source_id
+		LEFT JOIN LATERAL (
+			SELECT dv.name
+			FROM dedup_result dr
+			JOIN dedup_value dv ON dv.id = dr.value_id
+			WHERE dr.lead_row_id = lr.id
+			  AND dr.provider_id IN (SELECT p.id FROM dedup_provider p WHERE lower(p.name) IN ('заря', 'zarya'))
+			ORDER BY dr.checked_at DESC
+			LIMIT 1
+		) z ON true
+		WHERE lr.uuid = $1
+	`, uuid).Scan(
+		&out.ID,
+		&out.UUID,
+		&out.Phone,
+		&out.ChildSourceID,
+		&out.Region,
+		&out.RegionID,
+		&out.Zarya,
+		&out.ColdLabel,
+		&out.SourceDescription,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return entity.LeadForSkorozvon{}, fmt.Errorf("%w: lead %s", domain.ErrNotFound, uuid)
+		}
+		return entity.LeadForSkorozvon{}, fmt.Errorf("get lead for skorozvon: %w", err)
+	}
+	return out, nil
 }
 
 func (r *LeadRepo) getLead(ctx context.Context, where string, arg any) (entity.LeadDetail, error) {
@@ -811,6 +1492,7 @@ func (r *LeadRepo) getLead(ctx context.Context, where string, arg any) (entity.L
 		&d.CreatedAt,
 		&d.UpdatedAt,
 		&d.Zarya,
+		&d.ZaryaOld,
 		&d.UPK,
 	)
 	if err != nil {
@@ -830,6 +1512,12 @@ func (r *LeadRepo) getLead(ctx context.Context, where string, arg any) (entity.L
 		return entity.LeadDetail{}, err
 	}
 	d.Dispatches = dispatches
+
+	queues, err := r.listOutboxQueues(ctx, d.UUID)
+	if err != nil {
+		return entity.LeadDetail{}, err
+	}
+	d.Queues = queues
 
 	history, err := r.listPhoneHistory(ctx, d.Phone, d.ID)
 	if err != nil {
@@ -858,7 +1546,7 @@ func (r *LeadRepo) listAnketaFields(ctx context.Context, leadID int64) ([]entity
 			COALESCE(mf.name, ''),
 			COALESCE(mf.bitrix_code, ''),
 			f.enum_id,
-			COALESCE(mo.name, '')
+			COALESCE(NULLIF(TRIM(f.value_text), ''), mo.name, '')
 		FROM skorozvon_anketa_fields f
 		LEFT JOIN skorozvon_maps mf ON mf.field_id = f.field_id AND mf.option_id = 0
 		LEFT JOIN skorozvon_maps mo ON mo.field_id = f.field_id AND mo.option_id = f.enum_id
@@ -941,6 +1629,39 @@ ORDER BY e.occurred_at, e.id
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (r *LeadRepo) listOutboxQueues(ctx context.Context, leadUUID string) ([]entity.LeadOutboxQueue, error) {
+	leadUUID = strings.TrimSpace(leadUUID)
+	if leadUUID == "" {
+		return []entity.LeadOutboxQueue{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT uuid, 1::smallint, 'Скорозвон', count_retry, last_retry
+		FROM outbox_skorozvon
+		WHERE uuid_lead = $1
+		UNION ALL
+		SELECT uuid, 3::smallint, 'Битрикс', count_retry, last_retry
+		FROM outbox_bx24
+		WHERE uuid_lead = $1
+	`, leadUUID)
+	if err != nil {
+		return nil, fmt.Errorf("list outbox queues: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]entity.LeadOutboxQueue, 0)
+	for rows.Next() {
+		var item entity.LeadOutboxQueue
+		if err := rows.Scan(&item.UUID, &item.ChannelID, &item.Channel, &item.CountRetry, &item.LastRetry); err != nil {
+			return nil, fmt.Errorf("scan outbox queue: %w", err)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows outbox queues: %w", err)
+	}
+	return out, nil
 }
 
 func (r *LeadRepo) listDispatches(ctx context.Context, leadID int64) ([]entity.LeadDispatch, error) {
@@ -1032,6 +1753,27 @@ func leadListSourceJoin(f port.LeadListFilter) string {
 JOIN source s ON s.id = COALESCE(lr.child_source_id, lr.source_id)`
 }
 
+func leadListSkSelect(f port.LeadListFilter) string {
+	if len(f.SkSend) == 0 {
+		return `NULL::boolean, NULL::integer, ''::text`
+	}
+	return `sk.sent_ok, sk.http_status, COALESCE(sk.raw_response, '')`
+}
+
+func leadListSkJoin(f port.LeadListFilter) string {
+	if len(f.SkSend) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(`
+LEFT JOIN LATERAL (
+	SELECT d.sent_ok, d.http_status, LEFT(COALESCE(d.raw_response, ''), 500) AS raw_response
+	FROM dispatch d
+	WHERE d.lead_row_id = lr.id AND d.channel_id = %d
+	ORDER BY d.sent_at DESC
+	LIMIT 1
+) sk ON true`, entity.ChannelSkorozvon)
+}
+
 func leadListWhere(f port.LeadListFilter) (string, []any) {
 	var b strings.Builder
 	args := make([]any, 0, 8)
@@ -1095,6 +1837,25 @@ func leadListWhere(f port.LeadListFilter) (string, []any) {
 	ORDER BY dr.checked_at DESC
 	LIMIT 1
 ) = ANY(` + p + `::text[])`)
+	}
+	if len(f.SkSend) > 0 {
+		p := next(f.SkSend)
+		b.WriteString(fmt.Sprintf(` AND (
+	CASE
+		WHEN NOT EXISTS (
+			SELECT 1 FROM dispatch d
+			WHERE d.lead_row_id = lr.id AND d.channel_id = %d
+		) THEN 'none'
+		WHEN (
+			SELECT d.sent_ok
+			FROM dispatch d
+			WHERE d.lead_row_id = lr.id AND d.channel_id = %d
+			ORDER BY d.sent_at DESC
+			LIMIT 1
+		) THEN 'ok'
+		ELSE 'error'
+	END
+) = ANY(`, entity.ChannelSkorozvon, entity.ChannelSkorozvon) + p + `::text[])`)
 	}
 	return b.String(), args
 }

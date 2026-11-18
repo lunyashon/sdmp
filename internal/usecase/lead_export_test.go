@@ -50,6 +50,35 @@ func TestExportXLSXSelectedColumnsAndIDs(t *testing.T) {
 	}
 }
 
+func TestExportXLSXAttachesSkDispatch(t *testing.T) {
+	created := time.Date(2026, 8, 27, 16, 27, 56, 0, time.UTC)
+	status := 429
+	repo := &stubLeadList{
+		total: 1,
+		items: []entity.LeadListItem{{
+			ID: 42, UUID: "abc-uuid", DateCreate: created,
+		}},
+		sk: []entity.LeadSkDispatch{{
+			LeadRowID: 42, SentOK: false, HTTPStatus: &status, Error: "rate",
+		}},
+	}
+	file, err := NewLeadService(repo, nil).ExportXLSX(context.Background(), LeadFilterQuery{
+		DateFrom: "01.08.2026 00:00:00",
+		DateTo:   "30.08.2026 23:59:59",
+		IDs:      []int64{42},
+	}, []string{"uuid", "skSend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.skIDs) != 1 || repo.skIDs[0] != 42 {
+		t.Fatalf("sk ids %+v", repo.skIDs)
+	}
+	sheet := xlsxSheet(t, file.Body)
+	if !strings.Contains(sheet, "Ошибка 429") || !strings.Contains(sheet, "rate") {
+		t.Fatalf("sheet %s", sheet)
+	}
+}
+
 func TestExportXLSXRequiresColumns(t *testing.T) {
 	_, err := NewLeadService(&stubLeadList{}, nil).ExportXLSX(context.Background(), LeadFilterQuery{
 		DateFrom: "01.08.2026 00:00:00",

@@ -15,6 +15,7 @@ import (
 	"github.com/lunyashon/sdmp/internal/domain/entity"
 	"github.com/lunyashon/sdmp/internal/lib/clock"
 	"github.com/lunyashon/sdmp/internal/lib/id"
+	phonepkg "github.com/lunyashon/sdmp/internal/lib/phone"
 	"github.com/lunyashon/sdmp/internal/port"
 )
 
@@ -25,12 +26,12 @@ const (
 )
 
 type ReceiveLeadInput struct {
-	UserID     string
-	Token      string
-	Phone      string
-	SourceCode string
-	WebID      string
-	Payload    map[string]any
+	UserID            string
+	Token             string
+	Phone             string
+	SourceDescription string
+	WebID             string
+	Payload           map[string]any
 }
 
 type ReceiveLeadService struct {
@@ -88,9 +89,8 @@ func (s *ReceiveLeadService) Receive(ctx context.Context, in ReceiveLeadInput) (
 	if phone == "" {
 		return 0, fmt.Errorf("%w: PHONE is required", domain.ErrInvalidInput)
 	}
-	sourceCode := strings.TrimSpace(in.SourceCode)
-	if sourceCode != "" && src.BitrixCode != "" && sourceCode != src.BitrixCode {
-		return 0, fmt.Errorf("%w: SOURCE_ID mismatch", domain.ErrInvalidInput)
+	if normalized, ok := phonepkg.Normalize(phone); ok {
+		phone = normalized
 	}
 	webID := strings.TrimSpace(in.WebID)
 
@@ -131,13 +131,14 @@ func (s *ReceiveLeadService) Receive(ctx context.Context, in ReceiveLeadInput) (
 	}
 
 	leadID, err := s.leads.InsertAccepted(ctx, entity.LeadRow{
-		UUID:      uid,
-		Phone:     phone,
-		SourceID:  src.ID,
-		WebID:     webID,
-		StatusID:  entity.StatusAccepted,
-		S3Key:     s3Key,
-		CreatedAt: createdAt,
+		UUID:              uid,
+		Phone:             phone,
+		SourceID:          src.ID,
+		WebID:             webID,
+		SourceDescription: strings.TrimSpace(in.SourceDescription),
+		StatusID:          entity.StatusAccepted,
+		S3Key:             s3Key,
+		CreatedAt:         createdAt,
 	}, entity.OutboxMessage{
 		SourceID:  src.ID,
 		Payload:   string(raw),

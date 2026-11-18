@@ -11,6 +11,7 @@ import (
 
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
+	"github.com/lunyashon/sdmp/internal/lib/regionname"
 	"github.com/lunyashon/sdmp/internal/port"
 )
 
@@ -37,19 +38,19 @@ func (r *DictRepo) ListStatuses(ctx context.Context) ([]entity.NamedRef, error) 
 }
 
 func (r *DictRepo) ResolveRegion(ctx context.Context, alias string) (int, bool, error) {
-	alias = strings.TrimSpace(alias)
-	if alias == "" {
+	keys := regionname.LookupKeys(alias)
+	if len(keys) == 0 {
 		return 0, false, nil
 	}
 	var id int
 	err := r.pool.QueryRow(ctx, `
 		SELECT id FROM (
-			SELECT id FROM region WHERE lower(name) = lower($1)
+			SELECT id FROM region WHERE lower(name) = ANY($1::text[])
 			UNION ALL
-			SELECT region_id FROM region_alias WHERE lower(alias) = lower($1)
+			SELECT region_id FROM region_alias WHERE lower(alias) = ANY($1::text[])
 		) t
 		LIMIT 1
-	`, alias).Scan(&id)
+	`, lowerKeys(keys)).Scan(&id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, false, nil
@@ -57,6 +58,14 @@ func (r *DictRepo) ResolveRegion(ctx context.Context, alias string) (int, bool, 
 		return 0, false, fmt.Errorf("resolve region: %w", err)
 	}
 	return id, true, nil
+}
+
+func lowerKeys(keys []string) []string {
+	out := make([]string, len(keys))
+	for i, k := range keys {
+		out[i] = strings.ToLower(strings.TrimSpace(k))
+	}
+	return out
 }
 
 func (r *DictRepo) ListOperatorGroups(ctx context.Context) ([]entity.OperatorGroup, error) {
@@ -87,13 +96,31 @@ func (r *DictRepo) ListOperatorGroups(ctx context.Context) ([]entity.OperatorGro
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	unmapped, err := r.listUnmappedOperatorRaws(ctx)
+	otherID := 0
+	mapped := make(map[string]struct{}, 64)
+	for _, g := range out {
+		if g.Name == "ДРУГИЕ" {
+			otherID = g.ID
+		}
+		if key := strings.ToLower(strings.TrimSpace(g.Name)); key != "" {
+			mapped[key] = struct{}{}
+		}
+		for _, alias := range g.Aliases {
+			if key := strings.ToLower(strings.TrimSpace(alias)); key != "" {
+				mapped[key] = struct{}{}
+			}
+		}
+	}
+	if otherID == 0 {
+		return out, nil
+	}
+	unmapped, err := r.listUnmappedOperatorRaws(ctx, otherID, mapped)
 	if err != nil {
 		return nil, err
 	}
 	if len(unmapped) > 0 {
 		for i := range out {
-			if out[i].Name == "ДРУГИЕ" {
+			if out[i].ID == otherID {
 				out[i].Unmapped = unmapped
 				break
 			}
@@ -102,36 +129,44 @@ func (r *DictRepo) ListOperatorGroups(ctx context.Context) ([]entity.OperatorGro
 	return out, nil
 }
 
-func (r *DictRepo) listUnmappedOperatorRaws(ctx context.Context) ([]string, error) {
+func (r *DictRepo) listUnmappedOperatorRaws(ctx context.Context, otherID int, mapped map[string]struct{}) ([]string, error) {
 	const q = `
-		SELECT DISTINCT trim(lr.operator_raw)
-		FROM lead_row lr
-		JOIN operator o ON o.id = lr.operator_id AND o.name = 'ДРУГИЕ'
-		WHERE lr.operator_raw IS NOT NULL
-		  AND trim(lr.operator_raw) <> ''
-		  AND NOT EXISTS (
-			SELECT 1 FROM operator_alias a
-			WHERE lower(a.alias) = lower(trim(lr.operator_raw))
-		  )
-		  AND NOT EXISTS (
-			SELECT 1 FROM operator g
-			WHERE lower(g.name) = lower(trim(lr.operator_raw))
-		  )
+		SELECT DISTINCT operator_raw
+		FROM lead_row
+		WHERE operator_id = $1
+		  AND operator_raw IS NOT NULL
+		  AND operator_raw <> ''
 		ORDER BY 1
-		LIMIT 200
+		LIMIT 500
 	`
-	rows, err := r.pool.Query(ctx, q)
+	rows, err := r.pool.Query(ctx, q, otherID)
 	if err != nil {
 		return nil, fmt.Errorf("list unmapped operator raws: %w", err)
 	}
 	defer rows.Close()
 	out := make([]string, 0)
+	seen := make(map[string]struct{})
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
 			return nil, err
 		}
+		raw = strings.TrimSpace(raw)
+		key := strings.ToLower(raw)
+		if raw == "" {
+			continue
+		}
+		if _, ok := mapped[key]; ok {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		out = append(out, raw)
+		if len(out) >= 200 {
+			break
+		}
 	}
 	return out, rows.Err()
 }

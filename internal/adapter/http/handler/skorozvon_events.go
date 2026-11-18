@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
@@ -21,8 +20,6 @@ import (
 	"github.com/lunyashon/sdmp/internal/lib/clock"
 	"github.com/lunyashon/sdmp/internal/usecase"
 )
-
-const skorozvonEventLogLimit = 32 * 1024
 
 type SkorozvonEventAPI interface {
 	ApplyCallResult(ctx context.Context, skorozvonLeadID string, in entity.LeadCallResult, snap entity.LeadFromSkorozvon) error
@@ -210,14 +207,61 @@ func leadSnapshot(ev skorozvonEventEnvelope) entity.LeadFromSkorozvon {
 		created = *t
 	}
 	return entity.LeadFromSkorozvon{
-		Phone:        phone,
-		City:         firstNonEmpty(ev.Lead.City, ev.Contact.City),
-		Region:       strings.TrimSpace(ev.Call.Region),
-		Tag:          firstNonEmpty(firstString(ev.Lead.Tags), firstString(ev.Contact.Tags)),
-		LegacyRaw:    skorozvonLegacyJSON(ev),
-		CreatedAt:    created,
-		CustomFields: mergeCustomFields(ev.Lead.CustomFields, ev.Contact.CustomFields),
+		Phone:     phone,
+		City:      firstNonEmpty(ev.Lead.City, ev.Contact.City),
+		Region:    strings.TrimSpace(ev.Call.Region),
+		Tag:       firstNonEmpty(firstString(ev.Lead.Tags), firstString(ev.Contact.Tags)),
+		LegacyRaw: skorozvonLegacyJSON(ev),
+		CreatedAt: created,
+		CustomFields: bindNameToFIOField(
+			mergeCustomFields(ev.Lead.CustomFields, ev.Contact.CustomFields),
+			firstNonEmpty(ev.Lead.Name, ev.Contact.Name),
+		),
 	}
+}
+
+func bindNameToFIOField(fields []entity.SkorozvonCustomValue, name string) []entity.SkorozvonCustomValue {
+	name = entity.UsableSkorozvonName(name)
+	if name == "" {
+		return fields
+	}
+	raw, err := json.Marshal(name)
+	if err != nil {
+		return fields
+	}
+	out := make([]entity.SkorozvonCustomValue, 0, len(fields)+1)
+	found := false
+	for _, f := range fields {
+		if f.FieldID != entity.SkorozvonFIOFieldID {
+			out = append(out, f)
+			continue
+		}
+		found = true
+		if fioFieldFilled(f.Raw) {
+			out = append(out, f)
+			continue
+		}
+		out = append(out, entity.SkorozvonCustomValue{FieldID: entity.SkorozvonFIOFieldID, Raw: raw})
+	}
+	if !found {
+		out = append(out, entity.SkorozvonCustomValue{FieldID: entity.SkorozvonFIOFieldID, Raw: raw})
+	}
+	return out
+}
+
+func fioFieldFilled(raw []byte) bool {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == `""` {
+		return false
+	}
+	if raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return true
+		}
+		return entity.UsableSkorozvonName(s) != ""
+	}
+	return true
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -461,17 +505,4 @@ func parseSkorozvonTime(raw string) *time.Time {
 		}
 	}
 	return nil
-}
-
-func clipLogBody(raw []byte, limit int) (string, bool) {
-	if len(raw) <= limit {
-		return string(raw), false
-	}
-	cut := raw[:limit]
-	if !utf8.Valid(cut) {
-		for len(cut) > 0 && !utf8.Valid(cut) {
-			cut = cut[:len(cut)-1]
-		}
-	}
-	return string(cut) + "…", true
 }

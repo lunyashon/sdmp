@@ -149,3 +149,45 @@ func TestAddLeadNoRetryOn500(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
+
+func TestLeadFieldsUnwrapsBareObject(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/crm.lead.fields" {
+			t.Fatalf("path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"TITLE":{"TYPE":"string"},"UF_CRM_1":{"TITLE":"Город","TYPE":"string","ATTRIBUTES":["DYN"]},"ID":{"TYPE":"integer","ATTRIBUTES":["R-O"]}}`))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL, srv.Client()).LeadFields(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byCode := map[string]LeadFieldInfo{}
+	for _, f := range got {
+		byCode[f.Code] = f
+	}
+	if byCode["TITLE"].Title != "Название" || !byCode["TITLE"].Writable {
+		t.Fatalf("title %+v", byCode["TITLE"])
+	}
+	if byCode["UF_CRM_1"].Title != "Город" {
+		t.Fatalf("uf %+v", byCode["UF_CRM_1"])
+	}
+	if byCode["ID"].Writable {
+		t.Fatalf("id should be readonly %+v", byCode["ID"])
+	}
+}
+
+func TestSourceListBareArray(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/crm.source.list" {
+			t.Fatalf("path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`[{"STATUS_ID":"UC_L26K09","NAME":"GDMP","SORT":10}]`))
+	}))
+	defer srv.Close()
+	got, err := New(srv.URL, srv.Client()).SourceList(context.Background())
+	if err != nil || len(got) != 1 || got[0].StatusID != "UC_L26K09" {
+		t.Fatalf("%+v err=%v", got, err)
+	}
+}

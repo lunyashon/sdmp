@@ -18,6 +18,7 @@ type SourceAPI interface {
 	List(ctx context.Context) ([]entity.Source, error)
 	CreateToken(ctx context.Context, sourceID int) (entity.Source, string, error)
 	ListByToken(ctx context.Context, token string) ([]entity.Source, error)
+	Create(ctx context.Context, in usecase.CreateSourceInput) (entity.Source, error)
 	CreateChild(ctx context.Context, in usecase.CreateChildInput) (entity.Source, error)
 	Delete(ctx context.Context, sourceID int) error
 	DeleteToken(ctx context.Context, sourceID int) error
@@ -50,6 +51,37 @@ func (h *SourcesHandler) List(c *gin.Context) {
 		return
 	}
 	response.Success(c, sourcesResponse(items))
+}
+
+// Create
+// @Summary      Создать родительский источник
+// @Tags         sources
+// @Accept       json
+// @Produce      json
+// @Param        body body dto.CreateSourceRequest true "Источник"
+// @Success      201 {object} response.SuccessEnvelope{data=dto.SourceDTO}
+// @Failure      400 {object} response.ErrorEnvelope
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/sources [post]
+func (h *SourcesHandler) Create(c *gin.Context) {
+	var req dto.CreateSourceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	src, err := h.svc.Create(c.Request.Context(), usecase.CreateSourceInput{
+		Name:       req.Name,
+		BitrixCode: req.BitrixCode,
+		ColdLabel:  req.ColdLabel,
+		BaseLabel:  req.BaseLabel,
+	})
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+
+	response.JSON(c, http.StatusCreated, dto.NewSourceDTO(src))
 }
 
 // CreateToken

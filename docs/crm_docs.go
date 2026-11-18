@@ -17,7 +17,7 @@ const docTemplatecrm = `{
     "paths": {
         "/rest/{user_id}/{token}/crm.lead.add": {
             "get": {
-                "description": "user_id=1. token — токен источника. PHONE обязателен: строка \"79001234567\" или массив {VALUE,VALUE_TYPE}. SOURCE_ID должен совпасть с bitrix_code, если оба заданы. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552 — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806 — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form: fields[PHONE][0][VALUE]=79001234567",
+                "description": "user_id=1. token — токен источника, источник берётся только из него. PHONE обязателен: строка \"79001234567\" или массив {VALUE,VALUE_TYPE}. SOURCE_ID игнорируется. SOURCE_DESCRIPTION — дополнительно об источнике. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552 — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806 — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form: fields[PHONE][0][VALUE]=79001234567",
                 "consumes": [
                     "application/json",
                     "application/x-www-form-urlencoded",
@@ -75,6 +75,12 @@ const docTemplatecrm = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "$ref": "#/definitions/response.BitrixErrorBody"
                         }
@@ -88,7 +94,7 @@ const docTemplatecrm = `{
                 }
             },
             "post": {
-                "description": "user_id=1. token — токен источника. PHONE обязателен: строка \"79001234567\" или массив {VALUE,VALUE_TYPE}. SOURCE_ID должен совпасть с bitrix_code, если оба заданы. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552 — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806 — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form: fields[PHONE][0][VALUE]=79001234567",
+                "description": "user_id=1. token — токен источника, источник берётся только из него. PHONE обязателен: строка \"79001234567\" или массив {VALUE,VALUE_TYPE}. SOURCE_ID игнорируется. SOURCE_DESCRIPTION — дополнительно об источнике. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552 — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806 — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form: fields[PHONE][0][VALUE]=79001234567",
                 "consumes": [
                     "application/json",
                     "application/x-www-form-urlencoded",
@@ -146,6 +152,12 @@ const docTemplatecrm = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "$ref": "#/definitions/response.BitrixErrorBody"
                         }
@@ -161,7 +173,7 @@ const docTemplatecrm = `{
         },
         "/rest/{user_id}/{token}/crm.lead.add.json": {
             "get": {
-                "description": "user_id=1. token — токен источника. PHONE обязателен: строка \"79001234567\" или массив {VALUE,VALUE_TYPE}. SOURCE_ID должен совпасть с bitrix_code, если оба заданы. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552 — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806 — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form: fields[PHONE][0][VALUE]=79001234567",
+                "description": "user_id=1. token — токен источника, источник берётся только из него. PHONE обязателен: строка \"79001234567\" или массив {VALUE,VALUE_TYPE}. SOURCE_ID игнорируется. SOURCE_DESCRIPTION — дополнительно об источнике. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552 — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806 — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form: fields[PHONE][0][VALUE]=79001234567",
                 "consumes": [
                     "application/json",
                     "application/x-www-form-urlencoded",
@@ -219,6 +231,12 @@ const docTemplatecrm = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "$ref": "#/definitions/response.BitrixErrorBody"
                         }
@@ -232,7 +250,7 @@ const docTemplatecrm = `{
                 }
             },
             "post": {
-                "description": "user_id=1. token — токен источника. PHONE обязателен: строка \"79001234567\" или массив {VALUE,VALUE_TYPE}. SOURCE_ID должен совпасть с bitrix_code, если оба заданы. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552 — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806 — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form: fields[PHONE][0][VALUE]=79001234567",
+                "description": "user_id=1. token — токен источника, источник берётся только из него. PHONE обязателен: строка \"79001234567\" или массив {VALUE,VALUE_TYPE}. SOURCE_ID игнорируется. SOURCE_DESCRIPTION — дополнительно об источнике. UF_CRM_1752577998838 — web_id (идемпотентность). UF_CRM_1734523005552 — оператор. UF_CRM_1747216350206 — регион. UF_CRM_1766149282 — тег. UF_CRM_1699340770806 — номер проекта. TITLE и NAME опциональны. Те же ключи можно передать query/form: fields[PHONE][0][VALUE]=79001234567",
                 "consumes": [
                     "application/json",
                     "application/x-www-form-urlencoded",
@@ -294,8 +312,1230 @@ const docTemplatecrm = `{
                             "$ref": "#/definitions/response.BitrixErrorBody"
                         }
                     },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/crm.lead.fields": {
+            "get": {
+                "description": "Поля из документации crm.lead.add: TITLE, NAME, PHONE, SOURCE_ID, SOURCE_DESCRIPTION и UF_CRM_* (web_id, оператор, регион, тег, номер проекта), плюс COMMENTS, EMAIL, ASSIGNED_BY_ID. Тот же каталог отдают crm.deal.fields и crm.contact.fields.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.lead.fields",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Поля из документации crm.lead.add: TITLE, NAME, PHONE, SOURCE_ID, SOURCE_DESCRIPTION и UF_CRM_* (web_id, оператор, регион, тег, номер проекта), плюс COMMENTS, EMAIL, ASSIGNED_BY_ID. Тот же каталог отдают crm.deal.fields и crm.contact.fields.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.lead.fields",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/crm.lead.fields.json": {
+            "get": {
+                "description": "Поля из документации crm.lead.add: TITLE, NAME, PHONE, SOURCE_ID, SOURCE_DESCRIPTION и UF_CRM_* (web_id, оператор, регион, тег, номер проекта), плюс COMMENTS, EMAIL, ASSIGNED_BY_ID. Тот же каталог отдают crm.deal.fields и crm.contact.fields.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.lead.fields",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Поля из документации crm.lead.add: TITLE, NAME, PHONE, SOURCE_ID, SOURCE_DESCRIPTION и UF_CRM_* (web_id, оператор, регион, тег, номер проекта), плюс COMMENTS, EMAIL, ASSIGNED_BY_ID. Тот же каталог отдают crm.deal.fields и crm.contact.fields.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.lead.fields",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/crm.status.list": {
+            "get": {
+                "description": "Пустышка Битрикс. filter[ENTITY_ID]=SOURCE — источники (CALL, WEB, UC_BIGDATA…). filter[ENTITY_ID]=STATUS — стадии лида. Без фильтра — оба справочника.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.status.list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс. filter[ENTITY_ID]=SOURCE — источники (CALL, WEB, UC_BIGDATA…). filter[ENTITY_ID]=STATUS — стадии лида. Без фильтра — оба справочника.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.status.list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/crm.status.list.json": {
+            "get": {
+                "description": "Пустышка Битрикс. filter[ENTITY_ID]=SOURCE — источники (CALL, WEB, UC_BIGDATA…). filter[ENTITY_ID]=STATUS — стадии лида. Без фильтра — оба справочника.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.status.list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс. filter[ENTITY_ID]=SOURCE — источники (CALL, WEB, UC_BIGDATA…). filter[ENTITY_ID]=STATUS — стадии лида. Без фильтра — оба справочника.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.status.list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/crm.userfield.list": {
+            "get": {
+                "description": "Пустышка Битрикс: UF_CRM_* из документации crm.lead.add (web_id, оператор, регион, тег, номер проекта).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.userfield.list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс: UF_CRM_* из документации crm.lead.add (web_id, оператор, регион, тег, номер проекта).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.userfield.list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/crm.userfield.list.json": {
+            "get": {
+                "description": "Пустышка Битрикс: UF_CRM_* из документации crm.lead.add (web_id, оператор, регион, тег, номер проекта).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.userfield.list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс: UF_CRM_* из документации crm.lead.add (web_id, оператор, регион, тег, номер проекта).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "crm.userfield.list",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/profile": {
+            "get": {
+                "description": "Пустышка Битрикс: текущий пользователь вебхука (ID=1, ADMIN=true).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "profile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс: текущий пользователь вебхука (ID=1, ADMIN=true).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "profile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/profile.json": {
+            "get": {
+                "description": "Пустышка Битрикс: текущий пользователь вебхука (ID=1, ADMIN=true).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "profile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс: текущий пользователь вебхука (ID=1, ADMIN=true).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "profile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/scope": {
+            "get": {
+                "description": "Как в Битрикс: без параметров — права этого вебхука (crm, user, task, tasks_extended). full=true — полный список кодов. user_id в пути должен быть 1.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scope"
+                ],
+                "summary": "scope",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "true — вернуть все коды scope",
+                        "name": "full",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Как в Битрикс: без параметров — права этого вебхука (crm, user, task, tasks_extended). full=true — полный список кодов. user_id в пути должен быть 1.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scope"
+                ],
+                "summary": "scope",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "true — вернуть все коды scope",
+                        "name": "full",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/scope.json": {
+            "get": {
+                "description": "Как в Битрикс: без параметров — права этого вебхука (crm, user, task, tasks_extended). full=true — полный список кодов. user_id в пути должен быть 1.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scope"
+                ],
+                "summary": "scope",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "true — вернуть все коды scope",
+                        "name": "full",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Как в Битрикс: без параметров — права этого вебхука (crm, user, task, tasks_extended). full=true — полный список кодов. user_id в пути должен быть 1.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scope"
+                ],
+                "summary": "scope",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "true — вернуть все коды scope",
+                        "name": "full",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/tasks.task.add": {
+            "get": {
+                "description": "Пустышка Битрикс: возвращает фиктивный task.id, лид не создаёт задачу в системе.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "tasks.task.add",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс: возвращает фиктивный task.id, лид не создаёт задачу в системе.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "tasks.task.add",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/tasks.task.add.json": {
+            "get": {
+                "description": "Пустышка Битрикс: возвращает фиктивный task.id, лид не создаёт задачу в системе.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "tasks.task.add",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс: возвращает фиктивный task.id, лид не создаёт задачу в системе.",
+                "consumes": [
+                    "application/json",
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "tasks.task.add",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/user.get": {
+            "get": {
+                "description": "Пустышка Битрикс: три пользователя (1 администратор, 2 менеджер, 3 оператор). filter[ID] сужает список.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "user.get",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс: три пользователя (1 администратор, 2 менеджер, 3 оператор). filter[ID] сужает список.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "user.get",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/{user_id}/{token}/user.get.json": {
+            "get": {
+                "description": "Пустышка Битрикс: три пользователя (1 администратор, 2 менеджер, 3 оператор). filter[ID] сужает список.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "user.get",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.BitrixErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Пустышка Битрикс: три пользователя (1 администратор, 2 менеджер, 3 оператор). filter[ID] сужает список.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bitrix.mimic"
+                ],
+                "summary": "user.get",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Всегда 1",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Токен источника",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/response.BitrixErrorBody"
                         }
@@ -317,6 +1557,10 @@ const docTemplatecrm = `{
                     "items": {
                         "$ref": "#/definitions/dto.CRMLeadPhone"
                     }
+                },
+                "SOURCE_DESCRIPTION": {
+                    "type": "string",
+                    "example": "Яндекс.Директ"
                 },
                 "SOURCE_ID": {
                     "type": "string",
@@ -355,6 +1599,11 @@ const docTemplatecrm = `{
                     "description": "PHONE на корне, если нет fields.PHONE.",
                     "type": "string",
                     "example": "79001234567"
+                },
+                "SOURCE_DESCRIPTION": {
+                    "description": "SOURCE_DESCRIPTION на корне, если нет fields.SOURCE_DESCRIPTION.",
+                    "type": "string",
+                    "example": "Яндекс.Директ"
                 },
                 "SOURCE_ID": {
                     "description": "SOURCE_ID на корне, если нет fields.SOURCE_ID.",
@@ -438,7 +1687,7 @@ var SwaggerInfocrm = &swag.Spec{
 	BasePath:         "/",
 	Schemes:          []string{},
 	Title:            "SDMP crm.lead.add",
-	Description:      "Приём лида в формате Битрикс. JSON, form-urlencoded, multipart и query. user_id в пути должен быть 1. token — токен источника из настроек. PHONE обязателен. SOURCE_ID, если передан, должен совпасть с bitrix_code источника. Остальные fields сохраняются в сырьё; worker читает оператор, регион и тег.",
+	Description:      "Приём лида в формате Битрикс. JSON, form-urlencoded, multipart и query. user_id в пути должен быть 1. token — токен источника из настроек, источник берётся только из него. PHONE обязателен. SOURCE_ID не используется. SOURCE_DESCRIPTION — дополнительно об источнике, пишется в lead_row. Остальные fields сохраняются в сырьё; worker читает оператор, регион и тег.",
 	InfoInstanceName: "crm",
 	SwaggerTemplate:  docTemplatecrm,
 	LeftDelim:        "{{",

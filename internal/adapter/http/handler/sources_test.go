@@ -45,6 +45,15 @@ func (s stubSourceAPI) SetActive(_ context.Context, sourceID int, active bool) (
 	}
 	return entity.Source{ID: sourceID, Name: "TECT", IsActive: active}, nil
 }
+func (s stubSourceAPI) Create(_ context.Context, in usecase.CreateSourceInput) (entity.Source, error) {
+	if s.err != nil {
+		return entity.Source{}, s.err
+	}
+	if s.created.ID != 0 {
+		return s.created, nil
+	}
+	return entity.Source{ID: 400, Name: in.Name, BitrixCode: in.BitrixCode, IsActive: true}, nil
+}
 func (s stubSourceAPI) CreateChild(_ context.Context, in usecase.CreateChildInput) (entity.Source, error) {
 	if s.err != nil {
 		return entity.Source{}, s.err
@@ -121,6 +130,33 @@ func TestCreateChildSource(t *testing.T) {
 	got := decodeData[dto.SourceDTO](t, w.Body.Bytes())
 	if got.ID != 320 || got.Name != "ВР Теле2" || got.ParentID == nil || *got.ParentID != 12 {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestCreateParentSource(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/sources", bytes.NewBufferString(`{"name":"Новый источник","bitrix_code":"UC_TEST"}`))
+	req.Header.Set("Content-Type", "application/json")
+	sourcesRouter(stubSourceAPI{created: entity.Source{
+		ID: 400, Name: "Новый источник", BitrixCode: "UC_TEST", IsActive: true,
+	}}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	got := decodeData[dto.SourceDTO](t, w.Body.Bytes())
+	if got.ID != 400 || got.Name != "Новый источник" || got.ParentID != nil || got.BitrixCode != "UC_TEST" || !got.IsActive {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestCreateParentSourceBadJSON(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/sources", bytes.NewBufferString(`{`))
+	req.Header.Set("Content-Type", "application/json")
+	sourcesRouter(stubSourceAPI{}).ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
 }
 

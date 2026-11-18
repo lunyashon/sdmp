@@ -14,11 +14,23 @@ function apiError(body, fallback) {
     return fallback;
 }
 
+function formatPhone(raw) {
+    const s = String(raw == null ? '' : raw).trim();
+    if (!s) return '—';
+    let d = s.replace(/\D/g, '');
+    if (d.length === 10) d = '7' + d;
+    if (d.length === 11 && (d[0] === '7' || d[0] === '8')) {
+        d = '7' + d.slice(1);
+        return '+7 (' + d.slice(1, 4) + ') ' + d.slice(4, 7) + '-' + d.slice(7, 9) + '-' + d.slice(9, 11);
+    }
+    return s;
+}
+
 const STAGE_OPTIONS = [
     ['1', 'принята'],
     ['2', 'обогащена'],
     ['3', 'в СК'],
-    ['4', 'из СК'],
+    ['4', 'из звонилки'],
     ['5', 'в Б24'],
     ['6', 'отклонена'],
     ['7', 'ожидание'],
@@ -29,6 +41,16 @@ const ZARYA_OPTIONS = [
     ['Дубль', 'Дубль'],
     ['Ошибка проверки', 'Ошибка проверки'],
 ];
+const ZARYA_OLD_OPTIONS = [
+    ['Чистый', 'Чистый'],
+    ['дубль', 'дубль'],
+];
+
+const SK_SEND_OPTIONS = [
+    ['ok', 'Успех'],
+    ['error', 'Ошибка'],
+    ['none', 'Нет отправки'],
+];
 
 const FIELD_CATALOG = [
     { id: 'dateRange', label: 'Дата создания', group: 'Основные', type: 'daterange', pinned: true },
@@ -38,10 +60,11 @@ const FIELD_CATALOG = [
     { id: 'region', label: 'Регион', group: 'lead_row', type: 'multiselect', pinned: true, options: [] },
     { id: 'operator', label: 'Оператор связи', group: 'lead_row', type: 'multiselect', pinned: true, options: [] },
     { id: 'zarya', label: 'Проверка Зари', group: 'Основные', type: 'multiselect', pinned: true, options: ZARYA_OPTIONS },
-    { id: 'id', label: 'ID', group: 'Основные', type: 'text' },
+    { id: 'id', label: 'ID', group: 'Основные', type: 'text', pinned: true },
     { id: 'phone', label: 'Телефон', group: 'Основные', type: 'text', pinned: true },
     { id: 'stage', label: 'Стадия', group: 'lead_row', type: 'multiselect', pinned: true, options: STAGE_OPTIONS },
     { id: 'viaUs', label: 'Из скорозвона строка', group: 'lead_row', type: 'multiselect', pinned: true, options: [['false', 'Создалась'], ['true', 'Обновилось']] },
+    { id: 'skSend', label: 'Отправка в СК', group: 'dispatch', type: 'multiselect', pinned: true, options: SK_SEND_OPTIONS },
     { id: 'city', label: 'Город', group: 'lead_row', type: 'text' },
     { id: 'teg', label: 'Тег (вход)', group: 'lead_row', type: 'text' },
     { id: 'callResult', label: 'Результат звонка', group: 'lead_row', type: 'text' },
@@ -57,27 +80,29 @@ const COLUMN_CATALOG = [
     { id: 'childSource', label: 'Подисточник', get: r => esc(r.child_source || '—') },
     { id: 'baza', label: 'Холодная база', get: r => esc(r.cold_label || '—') },
     { id: 'kakaya', label: 'Какая база', get: r => esc(r.base_label || '—') },
-    { id: 'sourceDesc', label: 'Source description', get: r => esc(r.source_description || '—') },
+    { id: 'sourceDesc', label: 'Дополнительно об источнике', get: r => esc(r.source_description || '—') },
     { id: 'region', label: 'Регион', get: r => esc(r.region || '—') },
     { id: 'city', label: 'Город', get: r => esc(r.city || '—') },
     { id: 'operator', label: 'Оператор', get: r => esc(r.operator || '—') },
     { id: 'stage', label: 'Стадия', get: r => `<span class="stage"><span class="dot dot-${r.status_id || 0}"></span>${esc(r.stage || '—')}</span>` },
     { id: 'viaUs', label: 'Из скорозвона строка', get: r => r.via_us === false ? 'Создалась' : 'Обновилось' },
+    { id: 'skSend', label: 'Отправка в СК', get: r => skSendCell(r) },
     { id: 'zarya', label: 'Проверка Зари', get: r => r.zarya ? `<span class="badge ${zaryaBadgeClass(r.zarya)}">${esc(r.zarya)}</span>` : '—' },
+    { id: 'zaryaOld', label: 'Старая проверка на дубль', get: r => r.zarya_old ? `<span class="badge ${zaryaBadgeClass(r.zarya_old)}">${esc(r.zarya_old)}</span>` : '—' },
     { id: 'callResult', label: 'Результат звонка', get: r => esc(r.call_result_name || (r.call_result != null ? String(r.call_result) : '') || '—') },
     { id: 'upk', label: 'ЮПК', get: r => esc(r.upk || '—') },
-    { id: 'phone', label: 'Телефон', get: r => esc(r.phone || '—') },
+    { id: 'phone', label: 'Телефон', get: r => esc(formatPhone(r.phone)) },
     { id: 'teg', label: 'Тег (вход)', get: r => esc(r.tag || '—') },
     { id: 'webId', label: 'Web ID', get: r => esc(r.web_id || '—') },
     { id: 'projectNum', label: '№ проекта', get: r => esc(r.project_num || '—') },
 ];
-const DEFAULT_COLUMNS = ['id', 'date', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'stage', 'viaUs', 'zarya', 'upk', 'phone'];
+const DEFAULT_COLUMNS = ['id', 'date', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'stage', 'viaUs', 'skSend', 'zarya', 'upk', 'phone'];
 const COL_PREFS_KEY = 'sdmp.list.colprefs';
 const CARD_PREFS_KEY = 'sdmp.list.cardfields';
 const MIN_COL_WIDTH = 64;
 const DEFAULT_COL_WIDTHS = {
     chk: 36, uuid: 280, id: 90, date: 150, source: 140, childSource: 160, baza: 140, kakaya: 140,
-    sourceDesc: 180, region: 200, city: 140, operator: 120, stage: 120, viaUs: 170, zarya: 140,
+    sourceDesc: 180, region: 200, city: 140, operator: 120, stage: 120, viaUs: 170, skSend: 150, zarya: 140, zaryaOld: 180,
     callResult: 130, upk: 110, phone: 130, teg: 120, webId: 120, projectNum: 110,
 };
 let activeColumns = DEFAULT_COLUMNS.slice();
@@ -105,7 +130,7 @@ const CARD_FIELD_CATALOG = [
     { id: 'childSource', label: 'Подисточник', get: r => esc(r.child_source || '—') },
     { id: 'baza', label: 'Холодная база', get: r => esc(r.cold_label || '—') },
     { id: 'kakaya', label: 'Какая база', get: r => esc(r.base_label || '—') },
-    { id: 'sourceDesc', label: 'Source description', get: r => esc(r.source_description || '—') },
+    { id: 'sourceDesc', label: 'Дополнительно об источнике', get: r => esc(r.source_description || '—') },
     {
         id: 'region', label: 'Регион', get: r => {
             const src = r.region_source == null ? '' : ` <span style="color:var(--text-muted); font-size:11px;">(${esc(REGION_SOURCE[r.region_source] || r.region_source)})</span>`;
@@ -121,35 +146,38 @@ const CARD_FIELD_CATALOG = [
     },
     { id: 'teg', label: 'Тег (вход)', get: r => esc(r.tag || '—') },
     { id: 'zarya', label: 'Проверка по Заре', get: r => r.zarya ? `<span class="badge ${zaryaBadgeClass(r.zarya)}">${esc(r.zarya)}</span>` : '—' },
+    { id: 'zaryaOld', label: 'Старая проверка на дубль', get: r => r.zarya_old ? `<span class="badge ${zaryaBadgeClass(r.zarya_old)}">${esc(r.zarya_old)}</span>` : '—' },
     { id: 'callResult', label: 'Результат звонка', get: r => esc(r.call_result_name || (r.call_result != null ? String(r.call_result) : '') || '—') },
     { id: 'upk', label: 'ЮПК', get: r => esc(r.upk || '—') },
     { id: 'id', label: 'ID', get: r => r.id != null ? esc(r.id) : '—' },
     { id: 'webId', label: 'Web ID', get: r => esc(r.web_id || '—') },
     { id: 'projectNum', label: '№ проекта', get: r => esc(r.project_num || '—') },
     { id: 'uuid', label: 'UUID', get: r => esc(r.uuid || '—') },
-    { id: 'phoneRaw', label: 'Телефон', get: r => esc(r.phone || '—') },
+    { id: 'phoneRaw', label: 'Телефон', get: r => esc(formatPhone(r.phone)) },
     { id: 'phoneValid', label: 'Телефон валиден', get: r => r.phone_valid ? 'да' : 'нет' },
     { id: 'syryeKey', label: 's3_key', get: r => esc(r.s3_key || '—') },
     { id: 'bitrixLead', label: 'Bitrix lead id', get: r => esc(r.bitrix_lead_id || '—') },
     { id: 'createdAt', label: 'Дата создания', get: r => esc(r.created_at || '—') },
     { id: 'updatedAt', label: 'Дата обновления', get: r => esc(r.updated_at || '—') },
 ];
-const DEFAULT_CARD_FIELDS = ['stage', 'viaUs', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'zarya', 'callResult', 'upk', 'uuid'];
+const DEFAULT_CARD_FIELDS = ['stage', 'viaUs', 'source', 'childSource', 'baza', 'kakaya', 'sourceDesc', 'region', 'operator', 'zarya', 'zaryaOld', 'callResult', 'upk', 'uuid'];
 let cardVisibleFieldIds = DEFAULT_CARD_FIELDS.slice();
 let currentCardId = null;
 let currentCard = null;
 let dragCardFieldId = null;
 
 const DEFAULT_PAGE_SIZE = 15;
+let catalogSources = [];
 let pageRows = [];
 let total = 0;
 let page = 1;
 let pageSize = DEFAULT_PAGE_SIZE;
 let syncingURL = false;
 let selected = new Set();
-let loading = false;
+let loading = true;
 let savedFilters = [];
 let dragColId = null;
+let leadsFetchSeq = 0;
 
 function esc(s) {
     return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -216,6 +244,7 @@ async function loadCatalogs() {
     setFieldOptions('operator', (operatorsRes.items || []).map(x => [String(x.id), x.name]));
     const statuses = (statusesRes.items || []).map(x => [String(x.id), x.name]);
     if (statuses.length) setFieldOptions('stage', statuses);
+    catalogSources = allSources;
 }
 
 function renderFiltersGrid() {
@@ -289,6 +318,10 @@ function toggleMs(fid, e) {
 document.addEventListener('click', () => {
     document.querySelectorAll('.ms.open').forEach(x => x.classList.remove('open'));
 });
+document.addEventListener('scroll', () => {
+    const el = document.getElementById('import-source');
+    if (el && el.classList.contains('open')) positionImportSourceDrop();
+}, true);
 
 function filterMs(fid, query) {
     const el = document.getElementById(fieldValueId(fid));
@@ -420,30 +453,82 @@ function buildQuery() {
     const viaUsRaw = getFieldValue('viaUs');
     const viaUs = (Array.isArray(viaUsRaw) ? viaUsRaw : [viaUsRaw]).filter(v => v === 'true' || v === 'false');
     if (viaUs.length === 1) params.set('via_us', viaUs[0]);
+    appendMulti(params, 'sk_send', skSendFilterValues());
     params.set('limit', String(pageSize));
     params.set('offset', String((page - 1) * pageSize));
     return params;
 }
 
+function skSendFilterValues() {
+    const raw = getFieldValue('skSend');
+    return (Array.isArray(raw) ? raw : [raw]).filter(v => v === 'ok' || v === 'error' || v === 'none');
+}
+
 async function fetchLeads() {
     loading = true;
-    document.getElementById('total-count').textContent = '…';
+    const seq = ++leadsFetchSeq;
+    render();
     try {
-        const res = await fetch(API + '/rest/leads?' + buildQuery().toString());
+        const query = buildQuery();
+        const res = await fetch(API + '/rest/leads?' + query.toString());
         const body = await res.json();
         if (!res.ok || body.success === false) throw new Error(apiError(body, res.statusText));
+        if (seq !== leadsFetchSeq) return;
         const data = apiData(body);
         pageRows = data.leads || [];
         total = data.total || 0;
         pageSize = data.limit || pageSize;
-    } catch (err) {
-        pageRows = [];
-        total = 0;
-        showToast('Не удалось загрузить строки: ' + err.message, true);
-    } finally {
+        const skFiltered = skSendFilterValues().length > 0;
+        pageRows.forEach(r => { r.sk_loaded = skFiltered; });
         loading = false;
         render();
         writeListURL();
+        if (!skFiltered && activeColumns.includes('skSend') && pageRows.length) {
+            attachSkDispatch(pageRows, seq);
+        }
+    } catch (err) {
+        if (seq !== leadsFetchSeq) return;
+        pageRows = [];
+        total = 0;
+        showToast('Не удалось загрузить строки: ' + err.message, true);
+        loading = false;
+        render();
+        writeListURL();
+    }
+}
+
+async function attachSkDispatch(rows, seq) {
+    const ids = rows.map(r => r.id).filter(id => id != null);
+    if (!ids.length) return;
+    const params = new URLSearchParams();
+    ids.forEach(id => params.append('ids', String(id)));
+    try {
+        const res = await fetch(API + '/rest/leads/sk-dispatch?' + params.toString());
+        const body = await res.json();
+        if (!res.ok || body.success === false) throw new Error(apiError(body, res.statusText));
+        if (seq !== leadsFetchSeq) return;
+        const data = apiData(body);
+        const byID = {};
+        (data.items || []).forEach(item => { byID[item.id] = item; });
+        rows.forEach(r => {
+            const d = byID[r.id];
+            r.sk_loaded = true;
+            if (!d) {
+                r.sk_sent_ok = null;
+                r.sk_http_status = null;
+                r.sk_error = '';
+                return;
+            }
+            r.sk_sent_ok = d.sent_ok;
+            r.sk_http_status = d.http_status;
+            r.sk_error = d.error || '';
+        });
+        render();
+    } catch (err) {
+        if (seq !== leadsFetchSeq) return;
+        rows.forEach(r => { r.sk_loaded = true; });
+        render();
+        showToast('Не удалось загрузить отправку в СК: ' + err.message, true);
     }
 }
 
@@ -613,6 +698,11 @@ function loadColumnPrefs() {
                     const after = activeColumns.indexOf('stage');
                     if (after >= 0) activeColumns.splice(after + 1, 0, 'viaUs');
                     else activeColumns.push('viaUs');
+                }
+                if (!activeColumns.includes('skSend')) {
+                    const after = activeColumns.indexOf('viaUs');
+                    if (after >= 0) activeColumns.splice(after + 1, 0, 'skSend');
+                    else activeColumns.push('skSend');
                 }
                 if (!activeColumns.includes('id')) {
                     activeColumns.unshift('id');
@@ -910,13 +1000,30 @@ function zaryaBadgeClass(v) {
     return 'badge-dup';
 }
 
+function skSendCell(r) {
+    if (r.sk_sent_ok === true) {
+        const code = r.sk_http_status != null ? ' ' + r.sk_http_status : '';
+        return `<span class="badge badge-clean" title="${esc(r.sk_error || '')}">Успех${esc(code)}</span>`;
+    }
+    if (r.sk_sent_ok === false) {
+        const code = r.sk_http_status != null ? ' ' + r.sk_http_status : '';
+        return `<span class="badge badge-dup" title="${esc(r.sk_error || '')}">Ошибка${esc(code)}</span>`;
+    }
+    if (!r.sk_loaded) return '<span class="sk-send-pending">…</span>';
+    return '—';
+}
+
 function render() {
     const tbody = document.getElementById('table-body');
-    document.getElementById('total-count').textContent = total.toLocaleString('ru-RU');
+    document.getElementById('total-count').textContent = loading ? '…' : total.toLocaleString('ru-RU');
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     if (total > 0 && page > totalPages) page = totalPages;
     const startIdx = total === 0 ? 0 : (page - 1) * pageSize;
     document.getElementById('empty-state').style.display = !loading && total === 0 ? 'block' : 'none';
+    const scroll = document.getElementById('table-scroll');
+    const loadingEl = document.getElementById('table-loading');
+    if (scroll) scroll.classList.toggle('is-loading', loading);
+    if (loadingEl) loadingEl.hidden = !loading;
 
     const headRow = document.getElementById('table-head-row');
     const headCells = activeColumns.map(id => {
@@ -1039,6 +1146,364 @@ function showToast(msg, isError) {
     t.classList.add('show');
 }
 
+function toggleActionMenu(e) {
+    e.stopPropagation();
+    document.getElementById('action-menu').classList.toggle('show');
+}
+document.addEventListener('click', (e) => {
+    const menu = document.getElementById('action-menu');
+    if (menu && !e.target.closest('#action-menu-wrap')) menu.classList.remove('show');
+});
+function runAction(kind) {
+    document.getElementById('action-menu').classList.remove('show');
+    if (kind === 'export-selected') exportData('selected');
+    else if (kind === 'export-filter') exportData('all');
+    else if (kind === 'resend-sk') resendSkorozvon();
+    else if (kind === 'import') openImport();
+}
+
+async function resendSkorozvon() {
+    const ids = [...selected];
+    if (!ids.length) {
+        showToast('Выберите строки для повторной отправки в СК.', true);
+        return;
+    }
+    try {
+        showToast('Ставим в очередь Скорозвона…');
+        const res = await fetch(API + '/rest/leads/skorozvon/resend', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+        });
+        const body = await res.json();
+        if (!res.ok || body.success === false) throw new Error(apiError(body, res.statusText));
+        const data = apiData(body);
+        const queued = data.queued || 0;
+        const missing = data.missing || 0;
+        let msg = 'В очередь Скорозвона: ' + queued;
+        if (missing) msg += ', не найдены: ' + missing;
+        showToast(msg, queued === 0);
+        fetchLeads();
+    } catch (err) {
+        showToast('Не удалось переотправить в СК: ' + err.message, true);
+    }
+}
+
+let importPreview = null;
+const importMap = {};
+let importStep = 1;
+let importSourceId = '';
+let importBusy = false;
+let importAbort = false;
+
+function openImport() {
+    importPreview = null;
+    importStep = 1;
+    importSourceId = '';
+    importBusy = false;
+    importAbort = false;
+    Object.keys(importMap).forEach(k => delete importMap[k]);
+    const file = document.getElementById('import-file');
+    if (file) file.value = '';
+    setImportError('');
+    document.getElementById('import-loading').hidden = true;
+    document.getElementById('import-map-wrap').hidden = true;
+    document.getElementById('import-project-wrap').hidden = true;
+    document.getElementById('import-upload-wrap').hidden = true;
+    document.getElementById('import-foot').hidden = true;
+    document.getElementById('import-drop').hidden = false;
+    document.getElementById('import-sub').textContent = 'xlsx или csv. Сопоставление колонок, источник, затем очередь по связкам.';
+    document.getElementById('import-overlay').classList.add('show');
+}
+function closeImport() {
+    importAbort = true;
+    importBusy = false;
+    document.getElementById('import-overlay').classList.remove('show');
+}
+function setImportError(msg) {
+    const el = document.getElementById('import-error');
+    if (!msg) { el.hidden = true; el.textContent = ''; return; }
+    el.hidden = false;
+    el.textContent = msg;
+}
+async function uploadImportFile(file) {
+    if (!file || importBusy) return;
+    const name = String(file.name || '').toLowerCase();
+    if (!/\.(xlsx|csv|txt)$/.test(name)) {
+        setImportError('Нужен файл xlsx или csv.');
+        return;
+    }
+    setImportError('');
+    document.getElementById('import-loading').hidden = false;
+    document.getElementById('import-map-wrap').hidden = true;
+    document.getElementById('import-foot').hidden = true;
+    const body = new FormData();
+    body.append('file', file);
+    try {
+        const res = await fetch(API + '/rest/leads/import/preview', { method: 'POST', body });
+        const json = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(apiError(json, res.statusText));
+        importPreview = apiData(json);
+        importStep = 1;
+        importSourceId = '';
+        Object.keys(importMap).forEach(k => delete importMap[k]);
+        const suggested = importPreview.suggested || {};
+        Object.keys(suggested).forEach(idx => { importMap[idx] = suggested[idx]; });
+        renderImportMapping();
+        showImportStep(1);
+    } catch (err) {
+        setImportError('Не удалось прочитать файл: ' + err.message);
+    } finally {
+        document.getElementById('import-loading').hidden = true;
+        const input = document.getElementById('import-file');
+        if (input) input.value = '';
+    }
+}
+function importRowCount() {
+    if (!importPreview) return 0;
+    if (Array.isArray(importPreview.rows)) return importPreview.rows.length;
+    return Number(importPreview.row_count) || 0;
+}
+function importHasPhone() {
+    return Object.values(importMap).includes('phone');
+}
+function showImportStep(step) {
+    importStep = step;
+    const loaded = !!importPreview;
+    document.getElementById('import-drop').hidden = step !== 1;
+    document.getElementById('import-map-wrap').hidden = !(loaded && step === 1);
+    document.getElementById('import-project-wrap').hidden = step !== 2;
+    document.getElementById('import-upload-wrap').hidden = step !== 3;
+    document.getElementById('import-foot').hidden = !loaded;
+    document.getElementById('import-step-n').textContent = String(step);
+    document.getElementById('import-back').hidden = step === 1 || importBusy;
+    const next = document.getElementById('import-next');
+    next.hidden = false;
+    next.disabled = importBusy;
+    if (step === 1) {
+        next.textContent = 'Далее';
+        const n = importRowCount();
+        document.getElementById('import-sub').textContent =
+            (importPreview.filename || 'файл') + ' · ' + n.toLocaleString('ru-RU') + ' строк' +
+            (importPreview.truncated ? ' (обрезано)' : '');
+    } else if (step === 2) {
+        next.textContent = 'Далее';
+        document.getElementById('import-sub').textContent = 'Источник. Подисточник и проект назначатся по связкам.';
+        renderImportSources();
+    } else {
+        next.textContent = importBusy ? 'Загрузка…' : 'Закрыть';
+    }
+}
+function importBack() {
+    if (importBusy) return;
+    setImportError('');
+    if (importStep === 2) showImportStep(1);
+    else if (importStep === 3) showImportStep(2);
+}
+function importNext() {
+    if (importStep === 1) {
+        if (!importHasPhone()) { setImportError('Сопоставьте колонку с полем «Телефон» (phone).'); return; }
+        if (importRowCount() === 0) { setImportError('В файле нет строк данных.'); return; }
+        setImportError('');
+        showImportStep(2);
+        return;
+    }
+    if (importStep === 2) {
+        if (!importSourceId) { setImportError('Выберите источник.'); return; }
+        setImportError('');
+        showImportStep(3);
+        startImportUpload();
+        return;
+    }
+    if (importStep === 3 && !importBusy) closeImport();
+}
+function importParentSources() {
+    return (catalogSources || []).filter(s => !s.parent_id).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'));
+}
+function importSourceLabel() {
+    if (!importSourceId) return '';
+    const s = importParentSources().find(x => String(x.id) === String(importSourceId));
+    return s ? (s.name || String(s.id)) : String(importSourceId);
+}
+function renderImportSources() {
+    const wrap = document.getElementById('import-source');
+    const opts = document.getElementById('import-source-opts');
+    const label = wrap && wrap.querySelector('.ms-label');
+    if (!wrap || !opts) return;
+    if (!catalogSources.length) {
+        loadCatalogs().then(() => { if (importStep === 2) renderImportSources(); }).catch(() => {});
+    }
+    const parents = importParentSources();
+    opts.innerHTML = parents.length
+        ? parents.map(s => {
+            const sel = String(s.id) === String(importSourceId) ? ' is-selected' : '';
+            return `<div class="ms-opt${sel}" data-id="${esc(String(s.id))}" data-text="${esc(String(s.name || s.id).toLowerCase())}" onclick="selectImportSource(this.dataset.id)">${esc(s.name || s.id)}</div>`;
+        }).join('')
+        : '<div class="ms-empty">Нет источников</div>';
+    if (label) label.textContent = importSourceLabel() || 'Выберите источник';
+}
+function toggleImportSourceMs(e) {
+    e.stopPropagation();
+    const el = document.getElementById('import-source');
+    if (!el) return;
+    const open = el.classList.contains('open');
+    document.querySelectorAll('.ms.open').forEach(x => x.classList.remove('open'));
+    if (open) return;
+    el.classList.add('open');
+    positionImportSourceDrop();
+    const search = el.querySelector('.ms-search');
+    if (search) {
+        search.value = '';
+        filterImportSourceMs('');
+        search.focus();
+    }
+}
+function positionImportSourceDrop() {
+    const el = document.getElementById('import-source');
+    const drop = el && el.querySelector('.ms-drop');
+    const trigger = el && el.querySelector('.ms-trigger');
+    if (!drop || !trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    drop.style.top = (rect.bottom + 4) + 'px';
+    drop.style.left = rect.left + 'px';
+    drop.style.width = Math.max(rect.width, 240) + 'px';
+}
+function filterImportSourceMs(query) {
+    const el = document.getElementById('import-source');
+    if (!el) return;
+    const q = (query || '').toLowerCase();
+    el.querySelectorAll('.ms-opt').forEach(opt => {
+        opt.classList.toggle('hidden', Boolean(q) && !(opt.dataset.text || '').includes(q));
+    });
+}
+function selectImportSource(id) {
+    importSourceId = id || '';
+    setImportError('');
+    const wrap = document.getElementById('import-source');
+    if (wrap) wrap.classList.remove('open');
+    renderImportSources();
+}
+function importSelectLabel() {
+    return importSourceLabel() || String(importSourceId || '');
+}
+function setImportProgress(done, total, extra) {
+    const pct = total ? Math.min(100, Math.round(done * 100 / total)) : 0;
+    document.getElementById('import-progress-fill').style.width = pct + '%';
+    document.getElementById('import-progress-text').textContent =
+        done.toLocaleString('ru-RU') + ' / ' + total.toLocaleString('ru-RU') + ' в очередь' + (extra ? ' · ' + extra : '');
+}
+async function startImportUpload() {
+    const rows = (importPreview && importPreview.rows) || [];
+    const total = rows.length;
+    importBusy = true;
+    importAbort = false;
+    showImportStep(3);
+    setImportProgress(0, total, '');
+    document.getElementById('import-upload-hint').textContent =
+        'Источник: ' + importSelectLabel() +
+        '. Подисточник и проект — по связкам. Пачки по 500.';
+    let queued = 0;
+    let failed = 0;
+    const mapping = {};
+    Object.keys(importMap).forEach(k => { mapping[k] = importMap[k]; });
+    try {
+        for (let i = 0; i < rows.length; i += 500) {
+            if (importAbort) throw new Error('остановлено');
+            const chunk = rows.slice(i, i + 500);
+            const res = await fetch(API + '/rest/leads/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_id: Number(importSourceId),
+                    mapping,
+                    rows: chunk,
+                }),
+            });
+            const json = await res.json().catch(() => null);
+            if (!res.ok) throw new Error(apiError(json, res.statusText));
+            const data = apiData(json) || {};
+            queued += Number(data.queued) || 0;
+            failed += Number(data.failed) || 0;
+            setImportProgress(Math.min(queued + failed, total), total, failed ? ('ошибок ' + failed) : '');
+        }
+        document.getElementById('import-sub').textContent =
+            'В очередь: ' + queued.toLocaleString('ru-RU') +
+            (failed ? ', не принято ' + failed.toLocaleString('ru-RU') : '') +
+            '. Дальше воркер обогатит и отправит по связкам.';
+        document.getElementById('import-upload-hint').textContent = 'Готово. В очереди outbox — стандартный пайплайн воркера.';
+    } catch (err) {
+        setImportError('Импорт прерван: ' + err.message);
+        document.getElementById('import-sub').textContent = 'Загрузка не завершена.';
+    } finally {
+        importBusy = false;
+        const next = document.getElementById('import-next');
+        next.disabled = false;
+        next.textContent = 'Закрыть';
+        document.getElementById('import-back').hidden = true;
+    }
+}
+function renderImportMapping() {
+    const wrap = document.getElementById('import-map');
+    const cols = (importPreview && importPreview.columns) || [];
+    const fields = (importPreview && importPreview.fields) || [];
+    const used = new Set(Object.values(importMap).filter(Boolean));
+    wrap.innerHTML = cols.map(col => {
+        const cur = importMap[String(col.index)] || '';
+        const samples = (col.samples || []).join(' · ');
+        const opts = ['<option value="">— не маппить —</option>'].concat(fields.map(f => {
+            const taken = used.has(f.id) && f.id !== cur;
+            return `<option value="${esc(f.id)}" ${f.id === cur ? 'selected' : ''} ${taken ? 'disabled' : ''}>${esc(f.label)} (${esc(f.column)})</option>`;
+        }));
+        return `<div class="import-map-row">
+          <div class="import-map-col">
+            <div class="import-map-name" title="${esc(col.name)}">${esc(col.name)}</div>
+            <div class="import-map-samples">${samples ? esc(samples) : 'пусто'}</div>
+          </div>
+          <div class="import-map-arrow">→</div>
+          <select onchange="setImportField(${col.index}, this.value)">${opts.join('')}</select>
+        </div>`;
+    }).join('');
+    renderImportPreview();
+}
+function setImportField(index, fieldId) {
+    const key = String(index);
+    if (!fieldId) delete importMap[key];
+    else {
+        Object.keys(importMap).forEach(k => { if (importMap[k] === fieldId) delete importMap[k]; });
+        importMap[key] = fieldId;
+    }
+    renderImportMapping();
+}
+function renderImportPreview() {
+    const table = document.getElementById('import-preview-table');
+    const hint = document.getElementById('import-preview-hint');
+    const fields = (importPreview && importPreview.fields) || [];
+    const rows = (importPreview && importPreview.rows) || [];
+    const byId = {};
+    fields.forEach(f => { byId[f.id] = f; });
+    const mapped = Object.keys(importMap)
+        .map(idx => ({ index: Number(idx), fieldId: importMap[idx] }))
+        .filter(x => x.fieldId && byId[x.fieldId])
+        .sort((a, b) => a.index - b.index);
+    const n = Number(importPreview && importPreview.row_count) || rows.length;
+    const previewRows = rows.slice(0, 8);
+    if (!mapped.length) {
+        hint.textContent = 'Выберите хотя бы одно поле, чтобы увидеть превью.';
+        table.innerHTML = '<tbody><tr><td class="import-preview-empty">Нет сопоставленных полей</td></tr></tbody>';
+        return;
+    }
+    hint.textContent = 'Первые ' + previewRows.length + ' из ' + n.toLocaleString('ru-RU') + ' строк.';
+    const head = mapped.map(m => `<th>${esc(byId[m.fieldId].label)}<div style="font-weight:400;color:var(--text-muted);text-transform:none;">${esc(byId[m.fieldId].column)}</div></th>`).join('');
+    const body = previewRows.map(row => {
+        const cells = mapped.map(m => {
+            const v = row[m.index] == null || row[m.index] === '' ? '—' : String(row[m.index]);
+            return `<td title="${esc(v)}">${esc(v)}</td>`;
+        }).join('');
+        return `<tr>${cells}</tr>`;
+    }).join('');
+    table.innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body || '<tr><td class="import-preview-empty" colspan="' + mapped.length + '">В файле только заголовок</td></tr>'}</tbody>`;
+}
+
 function toggleCardFieldPicker(e) {
     e.stopPropagation();
     const picker = document.getElementById('card-field-picker');
@@ -1114,9 +1579,20 @@ function saveCardFieldPrefs() {
 function refreshCardMain() {
     if (currentCard) renderCardMain(currentCard);
 }
+function queueCardRows(r) {
+    return (r.queues || []).map(q => {
+        const bits = [q.status || 'в очереди на отправку'];
+        if (q.uuid) bits.push(q.uuid);
+        if (q.count_retry > 0) bits.push('повтор ' + q.count_retry);
+        return `<div class="kv">
+          <span class="k">Очередь: ${esc(q.channel || '')}</span>
+          <span class="v">${esc(bits.join(' · '))}</span>
+        </div>`;
+    }).join('');
+}
 function renderCardMain(r) {
     const visibleFields = cardVisibleFieldIds.map(id => CARD_FIELD_CATALOG.find(f => f.id === id)).filter(Boolean);
-    document.getElementById('card-main').innerHTML = visibleFields.map(f => `
+    const fields = visibleFields.map(f => `
         <div class="kv kv-drag" draggable="true" data-fld="${f.id}"
              ondragstart="onCardKvDragStart(event, '${f.id}')"
              ondragend="onCardKvDragEnd(event)"
@@ -1126,6 +1602,7 @@ function renderCardMain(r) {
           <span class="v">${f.get(r)}</span>
         </div>`).join('')
         || '<div style="grid-column:1/-1; color:var(--text-muted); font-size:13px;">Все поля скрыты — настройте через ⚙️ Поля.</div>';
+    document.getElementById('card-main').innerHTML = fields + queueCardRows(r);
 }
 function onCardKvDragStart(e, id) {
     dragCardFieldId = id;
@@ -1173,7 +1650,7 @@ function objectEntries(value) {
 function renderCard(r) {
     currentCard = r;
     currentCardId = r.id;
-    document.getElementById('card-phone').textContent = r.phone || '—';
+    document.getElementById('card-phone').textContent = formatPhone(r.phone);
     document.getElementById('card-sub').textContent = `${r.source || '—'} · создана ${r.created_at || '—'} · ${r.uuid || ('id ' + r.id)}`;
 
     renderCardMain(r);
@@ -1205,12 +1682,13 @@ function renderCard(r) {
     document.getElementById('card-legacy').innerHTML = kvHtml(objectEntries(r.legacy_fields));
 
     const recSection = document.getElementById('card-recording-section');
-    if (r.call_url) {
+    if (r.call_url || r.call_id) {
         recSection.style.display = '';
+        const recURL = API + '/rest/leads/' + encodeURIComponent(r.id || r.uuid) + '/recording';
         const player = document.getElementById('card-recording-player');
         player.innerHTML = `
       <div class="call-player">
-        <audio class="call-player-audio" controls preload="metadata" src="${esc(r.call_url)}"></audio>
+        <audio class="call-player-audio" controls preload="metadata" src="${esc(recURL)}"></audio>
         <p class="call-player-error" hidden>Не удалось загрузить запись.</p>
       </div>`;
         const audio = player.querySelector('audio');
@@ -1244,6 +1722,16 @@ function renderCard(r) {
             ok: true,
         });
     });
+    (r.queues || []).forEach(q => {
+        const extra = [q.uuid || '', q.count_retry > 0 ? 'повтор ' + q.count_retry : ''].filter(Boolean).join(' · ');
+        items.push({
+            at: q.last_retry || r.updated_at || r.created_at || '',
+            type: 'queue',
+            label: 'Отправка: ' + (q.channel || ''),
+            detail: extra,
+            status: q.status || 'в очереди на отправку',
+        });
+    });
     (r.dispatches || []).forEach((d, i) => {
         const isPartner = d.channel_id === 2 || d.channel === 'вебхук-партнёр';
         const who = isPartner && d.upk ? `покупатель ${d.upk}` : (d.channel || '');
@@ -1264,6 +1752,13 @@ function renderCard(r) {
     items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
     document.getElementById('card-timeline').innerHTML = items.length
         ? items.map(e => {
+            if (e.type === 'queue') {
+                return `<div class="tl-item tl-queue">
+        <div class="tl-label">${esc(e.label)}<span class="tl-badge wait">${esc(e.status || 'в очереди на отправку')}</span></div>
+        ${e.detail ? `<div class="tl-detail">${esc(e.detail)}</div>` : ''}
+        <div class="tl-time">${esc(e.at || '')}</div>
+      </div>`;
+            }
             if (e.type !== 'dispatch') {
                 return `<div class="tl-item">
         <div class="tl-label">${esc(e.label)}<span class="tl-badge ${e.ok ? 'ok' : 'fail'}">${e.ok ? 'ok' : 'ошибка'}</span></div>

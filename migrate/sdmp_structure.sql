@@ -204,7 +204,7 @@ CREATE TABLE public.event_type (
 -- Name: TABLE event_type; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.event_type IS '1=принята 2=обогащена 3=в СК 4=из СК 5=партнёру 6=в Б24 7=отклонена 8=архивирована';
+COMMENT ON TABLE public.event_type IS '1=принята 2=обогащена 3=в СК 4=из звонилки 5=партнёру 6=в Б24 7=отклонена 8=архивирована';
 
 --
 -- Name: lead_row; Type: TABLE; Schema: public; Owner: -
@@ -371,7 +371,7 @@ COMMENT ON COLUMN public.lead_row.call_form IS 'jsonb: ответы анкеты
 -- Name: COLUMN lead_row.status_id; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.lead_row.status_id IS '1=принята 2=обогащена 3=в СК 4=из СК 5=в Б24 6=отклонена 7=ожидание';
+COMMENT ON COLUMN public.lead_row.status_id IS '1=принята 2=обогащена 3=в СК 4=из звонилки 5=в Б24 6=отклонена 7=ожидание';
 
 --
 -- Name: COLUMN lead_row.s3_key; Type: COMMENT; Schema: public; Owner: -
@@ -1024,7 +1024,7 @@ CREATE TABLE public.status (
 -- Name: TABLE status; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.status IS '1=принята 2=обогащена 3=в СК 4=из СК 5=в Б24 6=отклонена 7=ожидание';
+COMMENT ON TABLE public.status IS '1=принята 2=обогащена 3=в СК 4=из звонилки 5=в Б24 6=отклонена 7=ожидание';
 
 --
 -- Name: upk; Type: TABLE; Schema: public; Owner: -
@@ -1376,7 +1376,7 @@ CREATE INDEX e_dmp_tmp_leads_2_source_id_idx ON public.e_dmp_tmp_leads_2 (source
 -- Name: lead_row_bitrix_lead_id_uidx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX lead_row_bitrix_lead_id_uidx ON public.lead_row (bitrix_lead_id) WHERE (bitrix_lead_id IS NOT NULL);
+CREATE INDEX lead_row_bitrix_lead_id_idx ON public.lead_row (bitrix_lead_id) WHERE (bitrix_lead_id IS NOT NULL);
 
 --
 -- Name: lead_row_created_at_idx; Type: INDEX; Schema: public; Owner: -

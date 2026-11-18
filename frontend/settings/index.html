@@ -3,7 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <title>Настройка Worker</title>
-<link rel="stylesheet" href="assets/css/style.css?v=19">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/settings/assets/css/style.css?v=32">
+<script src="/assets/js/auth.js?v=2"></script>
 </head>
 <body>
 <div class="wrap">
@@ -12,14 +16,19 @@
     <h1>Настройка Worker</h1>
     <nav class="app-nav" aria-label="Разделы">
       <a class="app-nav-item" href="/list/">Архив</a>
-      <a class="app-nav-item active" href="/settings/">Настройки</a>
+      <a class="app-nav-item active" href="/settings/guide/sources">Настройки</a>
     </nav>
   </div>
 
   <div class="section-switch" id="section-switch"></div>
   <div class="tabs" id="tabs"></div>
   <div class="form-error" id="page-error"></div>
-  <div id="panels"></div>
+  <div id="panels">
+    <div class="panel">
+      <div class="panel-head"><p class="panel-title">Источники</p></div>
+      <div class="page-loading"><span class="page-spinner" aria-hidden="true"></span>Загрузка…</div>
+    </div>
+  </div>
 
   <div class="overlay" id="drob-overlay" onclick="if(event.target===this) closeDroblenieModal(true)">
     <div class="modal-card">
@@ -102,6 +111,35 @@
     </div>
   </div>
 
+  <div class="overlay" id="google-overlay" onclick="if(event.target===this) closeGoogleSheetModal()">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <p class="modal-title" id="google-modal-title">—</p>
+          <p class="modal-sub" id="google-modal-sub">Просмотр</p>
+        </div>
+        <button class="card-close" onclick="closeGoogleSheetModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="edit-mode-banner" id="google-edit-banner">
+          Режим редактирования — текущий ключ в проде остаётся, пока изменения не применены.
+        </div>
+        <div class="form-error" id="google-error"></div>
+        <div id="google-modal-body-content"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-danger" id="google-btn-delete" style="display:none" onclick="confirmDeleteGoogleSheet(googleModalId)">Удалить</button>
+        <div style="display:flex; gap:8px; margin-left:auto;">
+          <button class="btn" id="google-btn-edit" onclick="enterGoogleSheetEditMode()">Редактировать</button>
+          <div id="google-edit-actions" style="display:none; gap:8px;">
+            <button class="btn" onclick="closeGoogleSheetModal()">Отменить</button>
+            <button class="btn btn-primary" id="google-apply-btn" onclick="applyGoogleSheetDraft()">Применить изменения</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="overlay" id="svyazka-overlay" onclick="if(event.target===this) closeSvyazkaModal(true)">
     <div class="modal-card">
       <div class="modal-head">
@@ -119,10 +157,13 @@
         <div id="svyazka-modal-body-content"></div>
       </div>
       <div class="modal-foot">
-        <button class="btn" id="svyazka-btn-edit" onclick="enterSvyazkaEditMode()">Редактировать</button>
-        <div id="svyazka-edit-actions" style="display:none; gap:8px;">
-          <button class="btn" onclick="closeSvyazkaModal(true)">Отменить</button>
-          <button class="btn btn-primary" id="svyazka-apply-btn" onclick="applySvyazkaDraft()">Применить изменения</button>
+        <button class="btn btn-danger" id="svyazka-btn-delete" style="display:none" onclick="confirmDeleteSvyazka(svyazkaModalProvider, svyazkaModalId)">Удалить</button>
+        <div style="display:flex; gap:8px; margin-left:auto;">
+          <button class="btn" id="svyazka-btn-edit" onclick="enterSvyazkaEditMode()">Редактировать</button>
+          <div id="svyazka-edit-actions" style="display:none; gap:8px;">
+            <button class="btn" onclick="closeSvyazkaModal(true)">Отменить</button>
+            <button class="btn btn-primary" id="svyazka-apply-btn" onclick="applySvyazkaDraft()">Применить изменения</button>
+          </div>
         </div>
       </div>
     </div>
@@ -130,6 +171,6 @@
 
 </div>
 
-<script src="assets/js/script.js?v=38"></script>
+<script src="/settings/assets/js/script.js?v=69"></script>
 </body>
 </html>

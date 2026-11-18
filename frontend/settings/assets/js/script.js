@@ -32,7 +32,7 @@ async function apiJSON(path, opts) {
 }
 
 function errorHost() {
-  const order = ['custom-prompt-overlay', 'svyazka-overlay', 'partner-overlay', 'drob-overlay'];
+  const order = ['custom-prompt-overlay', 'google-overlay', 'svyazka-overlay', 'partner-overlay', 'drob-overlay'];
   for (const id of order) {
     const overlay = document.getElementById(id);
     if (overlay && overlay.classList.contains('show')) {
@@ -71,6 +71,177 @@ async function loadOperators() {
     unmapped: o.unmapped || [],
   }));
   DATA.operatorDict.sort((a, b) => (a.group === 'ДРУГИЕ') - (b.group === 'ДРУГИЕ'));
+}
+
+async function loadBitrixMap() {
+  DATA.bitrixMap = await apiJSON('/rest/bitrix/lead-map');
+}
+
+const EXTRA_SDMP_BITRIX_FIELDS = [
+  { key: 'web_id', title: 'Web ID', group: 'CDP' },
+  { key: 'zarya', title: 'Проверка по Заре', group: 'CDP' },
+  { key: 'zarya_old', title: 'Старая проверка на дубль', group: 'CDP' },
+  { key: 'source_description', title: 'Дополнительно об источнике', group: 'CDP' },
+  { key: 'call_url', title: 'Ссылка на запись звонка', group: 'CDP' },
+];
+
+function bitrixMapState() {
+  const state = DATA.bitrixMap || { sdmp_fields: [], skorozvon_fields: [], bitrix_fields: [], statuses: [], sources: [], maps: [] };
+  if (!state.sdmp_fields) state.sdmp_fields = [];
+  const have = new Set(state.sdmp_fields.map(f => f.key));
+  EXTRA_SDMP_BITRIX_FIELDS.forEach(f => {
+    if (!have.has(f.key)) state.sdmp_fields.push(f);
+  });
+  return state;
+}
+
+function bitrixMapCode(key) {
+  const row = (bitrixMapState().maps || []).find(m => m.source_key === key);
+  return row ? (row.bitrix_code || '') : '';
+}
+
+function bitrixMapFixed(key) {
+  const row = (bitrixMapState().maps || []).find(m => m.source_key === key);
+  return row ? (row.fixed_value || '') : '';
+}
+
+function ensureBitrixMapRow(key) {
+  const state = bitrixMapState();
+  if (!state.maps) state.maps = [];
+  let row = state.maps.find(m => m.source_key === key);
+  if (!row) {
+    row = { source_key: key, bitrix_code: '', fixed_value: '' };
+    state.maps.push(row);
+  }
+  return row;
+}
+
+function bitrixFieldOptions() {
+  const fields = (bitrixMapState().bitrix_fields || []).filter(f => f.writable);
+  return [{ value: '', label: '— не отправлять' }].concat(fields.map(f => ({
+    value: f.code,
+    label: (f.title || f.code) + ' · ' + f.code,
+  })));
+}
+
+function bitrixStatusOptions() {
+  return [{ value: '', label: '— не задана' }].concat((bitrixMapState().statuses || []).map(s => ({
+    value: s.status_id,
+    label: (s.name || s.status_id) + ' · ' + s.status_id,
+  })));
+}
+
+function bitrixFieldLabel(code) {
+  if (!code) return '';
+  const f = (bitrixMapState().bitrix_fields || []).find(x => x.code === code);
+  return f ? ((f.title || f.code) + ' · ' + f.code) : code;
+}
+
+function bitrixStatusLabel(id) {
+  if (!id) return '';
+  const s = (bitrixMapState().statuses || []).find(x => x.status_id === id);
+  return s ? ((s.name || s.status_id) + ' · ' + s.status_id) : id;
+}
+
+function bitrixFieldsRenderer() {
+  const state = bitrixMapState();
+  const emptyCatalog = !(state.bitrix_fields || []).length;
+  const sdmpRows = (state.sdmp_fields || []).map((f, i) => {
+    const comboId = 'bx-sdmp-' + f.key;
+    const extra = f.key === 'status_id'
+      ? `<div style="margin-top:6px;">${comboHTML('bx-status-value', bitrixStatusLabel(bitrixMapFixed('status_id')), 'Стадия crm.status.list', 420)}</div>`
+      : '';
+    return `<tr>
+      <td>
+        <div style="font-weight:600;">${escAttr(f.title)}</div>
+        <div style="font-size:11px; color:var(--text-muted);">${escAttr(f.group)} · ${escAttr(f.key)}</div>
+      </td>
+      <td>${comboHTML(comboId, bitrixFieldLabel(bitrixMapCode(f.key)), 'Поле Битрикс', 420)}${extra}</td>
+    </tr>`;
+  }).join('');
+  const skRows = (state.skorozvon_fields || []).map(f => {
+    const comboId = 'bx-sk-' + f.field_id;
+    return `<tr>
+      <td>
+        <div style="font-weight:600;">${escAttr(f.name || ('FIELD_' + f.field_id))}</div>
+        <div style="font-size:11px; color:var(--text-muted);">Скорозвон · лид · FIELD_${escAttr(f.field_id)}${f.field_type ? ' · ' + escAttr(f.field_type) : ''}</div>
+      </td>
+      <td>${comboHTML(comboId, bitrixFieldLabel(f.bitrix_code || ''), 'Поле Битрикс', 420)}</td>
+    </tr>`;
+  }).join('');
+  return {
+    customHTML: `
+      <div class="incoming-toolbar" style="margin-bottom:12px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn" onclick="refreshBitrixMap()">Обновить из Битрикс</button>
+        <button class="btn btn-primary" onclick="saveBitrixMap()">Сохранить связку</button>
+      </div>
+      ${emptyCatalog ? '<p style="font-size:13px; color:var(--text-muted);">Справочник полей пуст. Нажмите «Обновить из Битрикс» — подтянутся crm.lead.fields, crm.status.list и crm.source.list.</p>' : ''}
+      <table>
+        <thead><tr><th>Поле CDP / Скорозвон</th><th>Поле лида в Битрикс</th></tr></thead>
+        <tbody>
+          ${sdmpRows}
+          ${skRows || ''}
+        </tbody>
+      </table>
+    `,
+    addFn: null,
+    note: 'Worker при создании лида в Б24 берёт эту таблицу. Поля Скорозвона пишутся в skorozvon_maps.bitrix_code, системные — в bitrix_lead_map. Стадия — фиксированное значение STATUS_ID.'
+  };
+}
+
+function bindBitrixMapCombos() {
+  const state = bitrixMapState();
+  const fieldOpts = bitrixFieldOptions();
+  (state.sdmp_fields || []).forEach(f => {
+    registerCombo('bx-sdmp-' + f.key, fieldOpts, value => {
+      ensureBitrixMapRow(f.key).bitrix_code = value;
+      renderPanels();
+    });
+  });
+  registerCombo('bx-status-value', bitrixStatusOptions(), value => {
+    ensureBitrixMapRow('status_id').fixed_value = value;
+    if (!bitrixMapCode('status_id')) ensureBitrixMapRow('status_id').bitrix_code = 'STATUS_ID';
+    renderPanels();
+  });
+  (state.skorozvon_fields || []).forEach(f => {
+    registerCombo('bx-sk-' + f.field_id, fieldOpts, value => {
+      f.bitrix_code = value;
+      renderPanels();
+    });
+  });
+}
+
+async function refreshBitrixMap() {
+  try {
+    DATA.bitrixMap = await apiJSON('/rest/bitrix/lead-map/refresh', { method: 'POST' });
+    fetched.bitrixMap = true;
+    renderPanels();
+    showToast(activeTab);
+  } catch (e) {
+    showError(e.message || e);
+  }
+}
+
+async function saveBitrixMap() {
+  const state = bitrixMapState();
+  try {
+    DATA.bitrixMap = await apiJSON('/rest/bitrix/lead-map', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        maps: state.maps || [],
+        skorozvon_fields: (state.skorozvon_fields || []).map(f => ({
+          field_id: f.field_id,
+          bitrix_code: f.bitrix_code || '',
+        })),
+      }),
+    });
+    fetched.bitrixMap = true;
+    renderPanels();
+    showToast(activeTab);
+  } catch (e) {
+    showError(e.message || e);
+  }
 }
 
 function mapPartner(p) {
@@ -114,29 +285,66 @@ async function loadRegions() {
   DATA.regions = (data.items || []).map(r => ({ id: r.id, name: r.name }));
 }
 
-function mapSkorozvonProject(p, prev) {
+const SKOROZVON_PROJECT_PAGE = 5;
+const hiddenSkorozvonProjectIDs = new Set();
+let skorozvonProjectOffset = 0;
+let skorozvonProjectName = '';
+let skorozvonProjectTotal = 0;
+let skorozvonProjectNameTimer = 0;
+let skorozvonProjectChecking = false;
+
+function mapSkorozvonProject(p) {
+  const id = p.uuid;
   return {
-    id: p.uuid,
-    uuid: p.uuid,
+    id,
+    uuid: id,
     nazvanie: p.name,
     project_id: p.project_id,
-    visible: prev && prev.visible === false ? false : true,
+    visible: !hiddenSkorozvonProjectIDs.has(id),
     created_at: p.created_at,
     last_date_request: p.last_date_request,
     last_request: p.last_request,
   };
 }
 
-async function loadSkorozvonProjects() {
-  const data = await apiJSON('/rest/skorozvon/projects');
-  const prev = {};
-  (DATA.skorozvonProjects || []).forEach(p => { prev[p.uuid || p.id] = p; });
-  DATA.skorozvonProjects = (data.items || []).map(p => mapSkorozvonProject(p, prev[p.uuid]));
+async function fetchSkorozvonProjectPage(offset, name) {
+  const params = new URLSearchParams();
+  params.set('offset', String(offset));
+  if (name) params.set('name', name);
+  return apiJSON('/rest/skorozvon/projects/list?' + params.toString());
 }
 
-function mapSvyazka(s) {
+async function loadSkorozvonProjects() {
+  const data = await fetchSkorozvonProjectPage(skorozvonProjectOffset, skorozvonProjectName.trim());
+  DATA.skorozvonProjects = (data.items || []).map(mapSkorozvonProject);
+  skorozvonProjectTotal = data.total || 0;
+  if (skorozvonProjectOffset > 0 && DATA.skorozvonProjects.length === 0 && skorozvonProjectTotal > 0) {
+    skorozvonProjectOffset = Math.max(0, Math.floor((skorozvonProjectTotal - 1) / SKOROZVON_PROJECT_PAGE) * SKOROZVON_PROJECT_PAGE);
+    return loadSkorozvonProjects();
+  }
+}
+
+async function loadAllSkorozvonProjects() {
+  const all = [];
+  for (let offset = 0, guard = 0; guard < 200; offset += SKOROZVON_PROJECT_PAGE, guard++) {
+    const data = await fetchSkorozvonProjectPage(offset, '');
+    const items = data.items || [];
+    all.push(...items.map(mapSkorozvonProject));
+    if (all.length >= (data.total || 0) || items.length === 0) break;
+  }
+  DATA.skorozvonProjectsAll = all;
+}
+
+function skorozvonProjectCatalog() {
+  return (DATA.skorozvonProjectsAll && DATA.skorozvonProjectsAll.length)
+    ? DATA.skorozvonProjectsAll
+    : (DATA.skorozvonProjects || []);
+}
+
+function mapSvyazka(s, provider) {
   return {
     id: s.id,
+    provider: provider || s.provider || 'skorozvon',
     nazvanie: s.name,
     pod_source_ids: s.child_source_ids || [],
     region_ids: s.region_ids || [],
@@ -145,19 +353,440 @@ function mapSvyazka(s) {
   };
 }
 
+function svyazkaProvider(s) {
+  return (s && s.provider) === 'crmcalls' ? 'crmcalls' : 'skorozvon';
+}
+
+function svyazkaProviderLabel(s) {
+  return svyazkaProvider(s) === 'crmcalls' ? 'CRMCalls' : 'Скорозвон';
+}
+
+function svyazkaApiPath(s) {
+  return svyazkaProvider(s) === 'crmcalls' ? '/rest/crmcalls/links' : '/rest/skorozvon/links';
+}
+
 function svyazkaPayload(s) {
-  return {
+  const payload = {
     name: s.nazvanie,
     type: s.type,
-    project_id: Number(s.project_id),
     child_source_ids: s.pod_source_ids || [],
     region_ids: s.region_ids || [],
   };
+  if (svyazkaProvider(s) === 'crmcalls') {
+    payload.project_id = String(s.project_id || '');
+  } else {
+    payload.project_id = Number(s.project_id);
+  }
+  return payload;
+}
+
+function findSvyazka(provider, id) {
+  return DATA.svyazki.find(x => svyazkaProvider(x) === (provider || 'skorozvon') && Number(x.id) === Number(id));
 }
 
 async function loadSvyazki() {
-  const data = await apiJSON('/rest/skorozvon/links');
-  DATA.svyazki = (data.items || []).map(mapSvyazka);
+  const [sk, cc] = await Promise.all([
+    apiJSON('/rest/skorozvon/links'),
+    apiJSON('/rest/crmcalls/links').catch(() => ({ items: [] })),
+  ]);
+  DATA.svyazki = (sk.items || []).map(s => mapSvyazka(s, 'skorozvon'))
+    .concat((cc.items || []).map(s => mapSvyazka(s, 'crmcalls')));
+}
+
+async function loadCrmcallsProjects() {
+  try {
+    const data = await apiJSON('/rest/crmcalls/projects');
+    DATA.crmcallsProjects = data.items || data || [];
+    if (!Array.isArray(DATA.crmcallsProjects)) DATA.crmcallsProjects = [];
+  } catch (_) {
+    DATA.crmcallsProjects = [];
+  }
+}
+
+function crmcallsProjectCatalog() {
+  return DATA.crmcallsProjects || [];
+}
+
+let crmcallsKeyDraft = '';
+let crmcallsBaseDraft = '';
+let crmcallsProjectName = '';
+let crmcallsConnecting = false;
+
+async function loadCrmcallsSettings() {
+  try {
+    DATA.crmcallsSettings = await apiJSON('/rest/crmcalls/settings');
+  } catch (_) {
+    DATA.crmcallsSettings = { has_key: false, base_url: 'https://cc.crmcalls.ru', api_key_masked: '', project_count: 0 };
+  }
+  if (!DATA.crmcallsSettings) DATA.crmcallsSettings = { has_key: false, base_url: 'https://cc.crmcalls.ru', api_key_masked: '', project_count: 0 };
+  if (!crmcallsBaseDraft) crmcallsBaseDraft = DATA.crmcallsSettings.base_url || 'https://cc.crmcalls.ru';
+}
+
+function crmcallsConnection() {
+  return DATA.crmcallsSettings || { has_key: false, base_url: 'https://cc.crmcalls.ru', api_key_masked: '', project_count: 0 };
+}
+
+async function reloadCrmcallsCatalog() {
+  fetched.crmcallsProjects = false;
+  fetched.crmcallsSettings = false;
+  await Promise.all([loadCrmcallsProjects(), loadCrmcallsSettings()]);
+  fetched.crmcallsProjects = true;
+  fetched.crmcallsSettings = true;
+}
+
+async function connectCrmcalls() {
+  const apiKey = (crmcallsKeyDraft || '').trim();
+  const baseUrl = (crmcallsBaseDraft || '').trim();
+  crmcallsConnecting = true;
+  if (activeTab === 'outgoingTraffic') renderPanels();
+  try {
+    await apiJSON('/rest/crmcalls/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey, base_url: baseUrl }),
+    });
+    crmcallsKeyDraft = '';
+    await reloadCrmcallsCatalog();
+    showToast(activeTab);
+    await refreshCrmcallsProjectsCheck();
+  } catch (err) {
+    showError(err.message || 'Не удалось подключить CRMCalls');
+  } finally {
+    crmcallsConnecting = false;
+    if (activeTab === 'outgoingTraffic') renderPanels();
+  }
+}
+
+async function syncCrmcallsProjects() {
+  try {
+    await apiJSON('/rest/crmcalls/projects/sync', { method: 'POST' });
+    await reloadCrmcallsCatalog();
+    renderPanels();
+    showToast(activeTab);
+    await refreshCrmcallsProjectsCheck();
+  } catch (err) {
+    showError(err.message || 'Не удалось синхронизировать проекты CRMCalls');
+  }
+}
+
+let crmcallsProjectChecking = false;
+
+function crmcallsCheckLabel(p) {
+  if (crmcallsProjectChecking && !p.last_date_request) {
+    return '<span class="status-pill">проверка\u2026</span>';
+  }
+  const status = String(p.status || '').toLowerCase();
+  const cabinetActive = status === 'active' || status === 'running' || status === 'enabled' || status === 'online';
+  if (!p.last_date_request) {
+    if (!status) return '\u2014';
+    return `<span class="status-pill ${cabinetActive ? 'on' : 'off'}">${cabinetActive ? 'активен' : 'не активен'}</span>`;
+  }
+  const ok = p.last_request === true;
+  const when = fmtCheckTime(p.last_date_request);
+  return `<span class="status-pill ${ok ? 'on' : 'off'}">${ok ? 'активен' : 'не активен'}</span><div style="font-size:11px; color:var(--text-muted); margin-top:3px;">${when}</div>`;
+}
+
+async function refreshCrmcallsProjectsCheck() {
+  if (!(DATA.crmcallsProjects || []).length) return;
+  crmcallsProjectChecking = true;
+  if (activeTab === 'outgoingTraffic') renderPanels();
+  try {
+    const data = await apiJSON('/rest/crmcalls/projects/refresh', { method: 'POST' });
+    DATA.crmcallsProjects = data.items || data || [];
+    if (!Array.isArray(DATA.crmcallsProjects)) DATA.crmcallsProjects = [];
+  } catch (err) {
+    showError(err.message || 'Не удалось проверить проекты CRMCalls');
+  } finally {
+    crmcallsProjectChecking = false;
+    if (activeTab === 'outgoingTraffic') renderPanels();
+  }
+}
+
+async function sendCrmcallsTest(projectId) {
+  const p = (DATA.crmcallsProjects || []).find(x => String(x.id) === String(projectId));
+  const name = p ? (p.name || p.id) : projectId;
+  showTestToast('Отправляем тестовую строку в \u00ab' + name + '\u00bb\u2026');
+  try {
+    const data = await apiJSON('/rest/crmcalls/projects/' + encodeURIComponent(projectId) + '/test', { method: 'POST' });
+    const extra = data.contact_id ? ' (id ' + data.contact_id + ')' : '';
+    showTestToast('Тест успешно отправлен \u2014 ' + name + extra);
+  } catch (err) {
+    showTestToast('Ошибка тестирования \u2014 ' + name + ': ' + (err.message || ''), true);
+  }
+}
+
+function svyazkaProjectTitle(s) {
+  const id = s && s.project_id;
+  if (!id) return '';
+  if (svyazkaProvider(s) === 'crmcalls') {
+    const pr = crmcallsProjectCatalog().find(p => String(p.id) === String(id));
+    return pr ? ((pr.name || pr.nazvanie || id) + ' (' + id + ')') : String(id);
+  }
+  const pr = skorozvonProjectCatalog().find(p => String(p.project_id) === String(id));
+  return pr ? (pr.nazvanie + ' (' + id + ')') : String(id);
+}
+
+async function loadGoogleSheets() {
+  const data = await apiJSON('/rest/google/sheets');
+  DATA.googleSheets = data.items || [];
+}
+
+function googleSheetURL(spreadsheetId) {
+  return 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(spreadsheetId) + '/edit';
+}
+
+function googleSheetCardHTML(s) {
+  const stops = (s.stop_source_ids || []).map(sourceName);
+  const regions = s.region_ids || [];
+  const table = s.spreadsheet_id || '';
+  return `
+  <div class="partner-card">
+    <div class="partner-card-head">
+      <span style="font-size:15px; font-weight:600; display:flex; align-items:center; gap:6px;">${escAttr(s.name)} <span style="font-size:11px; font-weight:500; color:var(--text-muted);">Google Sheets</span></span>
+      <span class="status-pill ${s.is_active !== false ? 'on' : 'off'}">${s.is_active !== false ? 'активен' : 'выключен'}</span>
+    </div>
+    <div class="partner-summary-row"><span class="k">Таблица</span><span class="v" style="font-family:monospace; font-size:11.5px;">${escAttr(table ? table.replace(/^https?:\/\//,'').slice(0,32)+'…' : '—')}</span></div>
+    <div class="partner-summary-row"><span class="k">Принимает</span><span class="v">${zaryaSummaryLabel(s.zarya_results)}</span></div>
+    <div class="partner-summary-row"><span class="k">Регион</span><span class="v">${regions.length ? regions.length + ' в списке' : 'не проверяется'}</span></div>
+    <div class="partner-summary-row"><span class="k">Стоп-источники</span><span class="v">${stops.length ? stops.length : 'нет'}</span></div>
+    <div class="partner-summary-row"><span class="k">Лист</span><span class="v">${escAttr(s.sheet_name || '—')}</span></div>
+    <button class="btn btn-sm partner-card-action" onclick="openGoogleSheetModal(${s.id})">Настроить</button>
+  </div>`;
+}
+
+let googleModalId = null;
+let googleDraft = null;
+let googleEditing = false;
+
+function openGoogleSheetModal(id) {
+  googleModalId = (typeof id === 'number') ? id : null;
+  googleEditing = false;
+  googleDraft = null;
+  document.getElementById('google-overlay').classList.add('show');
+  if (googleModalId === null) {
+    document.getElementById('google-modal-title').textContent = 'Новый инстанс Google Sheets';
+    enterGoogleSheetEditMode();
+  } else {
+    const s = DATA.googleSheets.find(x => x.id === googleModalId);
+    document.getElementById('google-modal-title').textContent = s ? s.name : 'Google Sheets';
+    renderGoogleSheetModal();
+  }
+}
+function closeGoogleSheetModal() {
+  document.getElementById('google-overlay').classList.remove('show');
+  googleModalId = null; googleDraft = null; googleEditing = false;
+}
+let googleRegionSearch = '';
+function enterGoogleSheetEditMode() {
+  googleEditing = true;
+  googleRegionSearch = '';
+  if (googleModalId === null) {
+    googleDraft = { name: '', spreadsheet_id: '', sheet_name: 'Телефоны', is_active: true, test_mode: true, zarya_results: [], regions: [], stops: [], credentials_text: '' };
+  } else {
+    const s = DATA.googleSheets.find(x => x.id === googleModalId);
+    googleDraft = {
+      name: s.name,
+      spreadsheet_id: s.spreadsheet_id,
+      sheet_name: s.sheet_name,
+      is_active: s.is_active !== false,
+      test_mode: !!s.test_mode,
+      zarya_results: (s.zarya_results || []).slice(),
+      regions: (s.region_ids || []).slice(),
+      stops: (s.stop_source_ids || []).slice(),
+      credentials_text: ''
+    };
+  }
+  document.getElementById('google-apply-btn').textContent = googleModalId === null ? 'Создать инстанс' : 'Применить изменения';
+  renderGoogleSheetModal();
+}
+function draftGoogleField(field, value) { googleDraft[field] = value; }
+function draftGoogleZaryaToggle(value, checked) {
+  if (checked) { if (!googleDraft.zarya_results.includes(value)) googleDraft.zarya_results.push(value); }
+  else { googleDraft.zarya_results = googleDraft.zarya_results.filter(v => v !== value); }
+  renderGoogleSheetModal();
+}
+function draftGoogleRegionToggle(regionId, checked) {
+  regionId = parseInt(regionId, 10);
+  if (checked) { if (!googleDraft.regions.includes(regionId)) googleDraft.regions.push(regionId); }
+  else { googleDraft.regions = googleDraft.regions.filter(r => r !== regionId); }
+  const summary = document.getElementById('google-region-summary');
+  if (summary) summary.innerHTML = googleRegionSummaryHTML();
+}
+function draftGoogleStopAdd(sourceId) { if (!googleDraft.stops.includes(sourceId)) { googleDraft.stops.push(sourceId); renderGoogleSheetModal(); } }
+function draftGoogleStopRemove(sourceId) { googleDraft.stops = googleDraft.stops.filter(s => s !== sourceId); renderGoogleSheetModal(); }
+function googleRegionSummaryHTML() {
+  return googleDraft.regions.length ? 'Выбрано: ' + googleDraft.regions.map(regionName).join(', ') : 'Ничего не отмечено — регион не проверяется';
+}
+function renderGoogleRegionListHTML() {
+  const filtered = (DATA.regions || []).filter(r => r.name.toLowerCase().includes(googleRegionSearch.toLowerCase()));
+  return filtered.map(r => `
+    <label style="display:flex; align-items:center; gap:8px; padding:4px 0; font-size:13px; cursor:pointer;">
+      <input type="checkbox" ${googleDraft.regions.includes(r.id)?'checked':''} onchange="draftGoogleRegionToggle(${r.id}, this.checked)">
+      ${r.name}
+    </label>`).join('') || '<div style="color:var(--text-muted); font-size:12px; padding:4px 0;">Ничего не найдено</div>';
+}
+function setGoogleRegionSearch(v) {
+  googleRegionSearch = v;
+  const list = document.getElementById('google-region-list');
+  if (list) list.innerHTML = renderGoogleRegionListHTML();
+}
+
+function renderGoogleSheetModal() {
+  const box = document.getElementById('google-modal-body-content');
+  document.getElementById('google-modal-sub').textContent = googleEditing
+    ? (googleModalId === null ? 'Создание инстанса' : 'Режим редактирования — черновик')
+    : 'Просмотр';
+  document.getElementById('google-edit-banner').classList.toggle('show', googleEditing && googleModalId !== null);
+  document.getElementById('google-btn-edit').style.display = (!googleEditing && googleModalId !== null) ? 'inline-block' : 'none';
+  document.getElementById('google-edit-actions').style.display = googleEditing ? 'flex' : 'none';
+  const delBtn = document.getElementById('google-btn-delete');
+  if (delBtn) delBtn.style.display = googleModalId !== null ? 'inline-block' : 'none';
+
+  if (!googleEditing) {
+    const s = DATA.googleSheets.find(x => x.id === googleModalId);
+    const href = s.spreadsheet_id ? googleSheetURL(s.spreadsheet_id) : '';
+    const regions = (s.region_ids || []).map(regionName);
+    const stops = (s.stop_source_ids || []).map(sourceName);
+    box.innerHTML = `
+      <div class="partner-field"><label>Активен</label><span class="cell-static">${s.is_active !== false ? 'да' : 'нет — полностью отключён'}</span></div>
+      <div class="partner-field"><label>Таблица</label>
+        <span style="display:flex; align-items:center; gap:6px;">
+          <span class="cell-static" style="font-family:monospace; font-size:12px; word-break:break-all;">${escAttr(s.spreadsheet_id)}</span>
+          ${href ? copyIconBtn(href, 'Ссылка на таблицу') : ''}
+        </span>
+      </div>
+      <div class="partner-field"><label>Лист</label><span class="cell-static">${escAttr(s.sheet_name)}</span></div>
+      <div class="partner-field"><label>Что принимает</label><span class="cell-static">${zaryaSummaryLabel(s.zarya_results)}</span></div>
+      <div class="partner-field"><label>Регион</label><span class="cell-static">${regions.length ? regions.join(', ') : 'не проверяется'}</span></div>
+      <div class="partner-field"><label>Стоп-источники</label><span class="cell-static">${stops.length ? stops.join(', ') : 'нет'}</span></div>
+      <div class="partner-field"><label>Сервисный аккаунт</label><span class="cell-static">${escAttr(s.client_email || '—')}</span></div>
+      <div class="partner-field"><label>Ключ</label><span class="cell-static">${s.has_key ? 'загружен, в интерфейсе не показывается' : 'нет'}</span></div>
+    `;
+    return;
+  }
+
+  const cAddStop = 'google-add-stop';
+  registerCombo(cAddStop, allSourceNamesFlat().filter(s => !googleDraft.stops.includes(s.id)).map(s => ({ value:s.id, label:s.label })), v => draftGoogleStopAdd(parseInt(v)));
+
+  box.innerHTML = `
+    <div class="partner-field">
+      <label>Активен ${helpIcon('Полное отключение инстанса — строки не уходят в таблицу, независимо от региона и стоп-источников.')}</label>
+      <label class="toggle"><input type="checkbox" ${googleDraft.is_active ? 'checked' : ''} onchange="draftGoogleField('is_active', this.checked)"><span class="toggle-slider"></span></label>
+    </div>
+    <div class="partner-field">
+      <label>Название</label>
+      <input class="cell-input" style="border:1px solid var(--border-strong);" value="${escAttr(googleDraft.name)}" placeholder="Например: Телефоны" onchange="draftGoogleField('name', this.value)">
+    </div>
+    <div class="partner-field">
+      <label>Spreadsheet ID ${helpIcon('Инстанс Google: id таблицы вместо webhook покупателя.')}</label>
+      <input class="cell-input" style="border:1px solid var(--border-strong); font-family:monospace; font-size:12px;" value="${escAttr(googleDraft.spreadsheet_id)}" placeholder="id из URL таблицы" onchange="draftGoogleField('spreadsheet_id', this.value)">
+    </div>
+    <div class="partner-field">
+      <label>Имя листа</label>
+      <input class="cell-input" style="border:1px solid var(--border-strong);" value="${escAttr(googleDraft.sheet_name)}" onchange="draftGoogleField('sheet_name', this.value)">
+    </div>
+    <div class="partner-field">
+      <label>Что принимает ${helpIcon('Результат проверки по Заре. Можно отметить несколько вариантов сразу.')}</label>
+      <div class="tag-list">
+        ${ZARYA_OPTIONS.map(([v,label]) => `
+          <label style="display:inline-flex; align-items:center; gap:4px; font-size:12.5px; background:#f0efeb; border:1px solid var(--border-strong); border-radius:14px; padding:3px 10px 3px 6px;">
+            <input type="checkbox" ${googleDraft.zarya_results.includes(v)?'checked':''} onchange="draftGoogleZaryaToggle('${v}', this.checked)">
+            ${label}
+          </label>`).join('')}
+      </div>
+      ${googleDraft.zarya_results.length === 0 ? '<div style="font-size:11px; color:var(--danger); margin-top:4px;">Не выбрано ни одного значения — в эту таблицу ничего не будет уходить.</div>' : ''}
+    </div>
+    <div class="partner-field">
+      <label>Регион ${helpIcon('Сужает список разрешённых регионов. Пустой список = регион не проверяется.')}</label>
+      <input type="text" class="cell-input" id="google-region-search-input" style="border:1px solid var(--border-strong); margin-bottom:6px;" placeholder="Поиск региона..." value="${googleRegionSearch}" oninput="setGoogleRegionSearch(this.value)">
+      <div id="google-region-list" style="max-height:170px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:6px 10px;">${renderGoogleRegionListHTML()}</div>
+      <div id="google-region-summary" style="font-size:11.5px; color:var(--text-muted); margin-top:5px;">${googleRegionSummaryHTML()}</div>
+    </div>
+    <div class="partner-field">
+      <label>Стоп-источники ${helpIcon('Строки этого источника не уходят в таблицу, даже если они дубль и регион подходит.')}</label>
+      <div class="tag-list">
+        ${googleDraft.stops.map(sid => `<span class="tag">${sourceName(sid)}<span class="tag-x" onclick="draftGoogleStopRemove(${sid})">&times;</span></span>`).join('') || '<span style="color:var(--text-muted); font-size:12px;">нет</span>'}
+      </div>
+      <div style="margin-top:6px; width:220px;">${comboHTML(cAddStop, '', '+ добавить стоп-источник')}</div>
+    </div>
+    <div class="partner-field">
+      <label>JSON сервисного аккаунта ${googleModalId === null ? '' : '(оставьте пустым, чтобы не менять ключ)'}</label>
+      <textarea class="cell-textarea" placeholder='{"type":"service_account","client_email":"...","private_key":"..."}' onchange="draftGoogleField('credentials_text', this.value)">${escAttr(googleDraft.credentials_text || '')}</textarea>
+    </div>
+  `;
+}
+
+function googleSheetPayload(draft) {
+  const body = {
+    name: draft.name,
+    spreadsheet_id: draft.spreadsheet_id,
+    sheet_name: draft.sheet_name,
+    is_active: draft.is_active !== false,
+    test_mode: !!draft.test_mode,
+    zarya_results: draft.zarya_results || [],
+    region_ids: draft.regions || [],
+    stop_source_ids: draft.stops || [],
+  };
+  const raw = String(draft.credentials_text || '').trim();
+  if (raw) body.credentials = JSON.parse(raw);
+  return body;
+}
+
+function applyGoogleSheetDraft() {
+  if (!googleDraft.name.trim()) { showError('Укажите название инстанса.'); return; }
+  if (!googleDraft.spreadsheet_id.trim()) { showError('Укажите spreadsheet_id.'); return; }
+  if (!googleDraft.sheet_name.trim()) { showError('Укажите имя листа.'); return; }
+  if (googleModalId === null && !String(googleDraft.credentials_text || '').trim()) {
+    showError('Вставьте JSON сервисного аккаунта.');
+    return;
+  }
+  let body;
+  try {
+    body = googleSheetPayload(googleDraft);
+  } catch (err) {
+    showError('JSON ключа не разбирается: ' + (err.message || err));
+    return;
+  }
+  const isNew = googleModalId === null;
+  customConfirm(isNew ? `Создать инстанс «${googleDraft.name}»?` : `Сохранить инстанс «${googleDraft.name}»?`, async (ok) => {
+    if (!ok) return;
+    try {
+      if (isNew) {
+        await apiJSON('/rest/google/sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } else {
+        await apiJSON('/rest/google/sheets/' + googleModalId, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      }
+      fetched.googleSheets = false;
+      await loadGoogleSheets();
+      fetched.googleSheets = true;
+      closeGoogleSheetModal();
+      renderPanels();
+      showToast(activeTab);
+    } catch (err) {
+      showError(err.message || 'Не удалось сохранить инстанс');
+    }
+  });
+}
+
+function confirmDeleteGoogleSheet(id) {
+  const s = DATA.googleSheets.find(x => x.id === id);
+  if (!s) return;
+  confirmChange(
+    `Удалить инстанс «${s.name}»? Ключ и привязка к таблице пропадут из CDP.`,
+    async () => {
+      await apiJSON('/rest/google/sheets/' + id, { method: 'DELETE' });
+      DATA.googleSheets = DATA.googleSheets.filter(x => x.id !== id);
+      if (googleModalId === id) closeGoogleSheetModal();
+    }
+  );
 }
 
 function operatorName(id) {
@@ -211,6 +840,14 @@ async function createChildSource(parentId, name) {
   });
 }
 
+async function createParentSource(name) {
+  return apiJSON('/rest/sources', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+}
+
 /* ===== СПРАВОЧНИКИ (редактируемые, с маппингом сырых значений) ===== */
 let DATA = {
   sources: [],
@@ -233,6 +870,9 @@ let DATA = {
   upk: [],
   regions: [],
   skorozvonProjects: [],
+  skorozvonProjectsAll: [],
+  crmcallsProjects: [],
+  crmcallsSettings: { has_key: false, base_url: 'https://cc.crmcalls.ru', api_key_masked: '', project_count: 0 },
   mediaplans: [
     { id:1, upk:'КР', region:'Московская область' },
     { id:2, upk:'КР', region:'Краснодарский край' },
@@ -240,8 +880,10 @@ let DATA = {
     { id:4, upk:'ББ', region:'Республика Татарстан' },
   ],
   operatorDict: [],
+  bitrixMap: null,
+  googleSheets: [],
   regionDict: [
-    { id:1, canonical:'Московская область', raw:['Москва и Московская область','Московская обл.','Московская область * Москва'] },
+    { id:1, canonical:'Московская область', raw:['Москва','Москва и Московская область','Московская обл.','Московская область * Москва'] },
     { id:2, canonical:'Кемеровская область', raw:['Кемеровская обл.','Кемеровская область - Кузбасс'] },
     { id:3, canonical:'Нижегородская область', raw:['Нижегородская обл.','Нижегородская область'] },
     { id:4, canonical:'Свердловская область', raw:['Свердловская обл.','Свердловская область'] },
@@ -262,29 +904,80 @@ function zaryaSummaryLabel(values) {
 let nextId = { sources:100, droblenie:100, sourceUpk:100, sourceSkorozvon:100, upk:100, mediaplans:100, operatorDict:100, regionDict:100, svyazki:100, skorozvonProjects:100 };
 let skorozvonHookActive = true;
 function setSkorozvonHookActive(checked) { skorozvonHookActive = checked; showToast(activeTab); }
-function addSkorozvonProject() {
-  customPrompt('Название проекта:', (name) => {
-    if (!name) return;
-    customPrompt('ID проекта в Скорозвоне:', async (rawId) => {
-      const projectId = parseInt(rawId, 10);
-      if (!projectId) {
-        showError('Нужен числовой project_id из Скорозвона');
-        return;
-      }
-      try {
-        await apiJSON('/rest/skorozvon/projects', {
+function skorozvonProjectPagerInfo() {
+  if (!skorozvonProjectTotal) return '0 из 0';
+  const from = skorozvonProjectOffset + 1;
+  const to = Math.min(skorozvonProjectOffset + SKOROZVON_PROJECT_PAGE, skorozvonProjectTotal);
+  return from + '\u2013' + to + ' из ' + skorozvonProjectTotal;
+}
+
+async function reloadSkorozvonProjectPage() {
+  fetched.skorozvonProjects = false;
+  await loadSkorozvonProjects();
+  fetched.skorozvonProjects = true;
+}
+
+async function checkCurrentSkorozvonProjects() {
+  const uuids = (DATA.skorozvonProjects || []).map(p => p.uuid || p.id).filter(Boolean);
+  if (!uuids.length) return;
+  skorozvonProjectChecking = true;
+  if (activeTab === 'outgoingTraffic') renderPanels();
+  try {
+    await apiJSON('/rest/skorozvon/projects/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, project_id: projectId }),
-        });
-        await loadSkorozvonProjects();
+      body: JSON.stringify({ uuids }),
+    });
+    await reloadSkorozvonProjectPage();
+  } finally {
+    skorozvonProjectChecking = false;
+    if (activeTab === 'outgoingTraffic') renderPanels();
+  }
+}
+
+async function shiftSkorozvonProjectPage(delta) {
+  const next = Math.max(0, skorozvonProjectOffset + delta);
+  if (next === skorozvonProjectOffset) return;
+  skorozvonProjectOffset = next;
+  try {
+    await reloadSkorozvonProjectPage();
+    renderPanels();
+    await checkCurrentSkorozvonProjects();
+  } catch (err) {
+    showError(err.message || 'Не удалось загрузить проекты');
+  }
+}
+
+async function applySkorozvonProjectSearch() {
+  clearTimeout(skorozvonProjectNameTimer);
+  const input = document.getElementById('skorozvon-project-search');
+  if (input) skorozvonProjectName = input.value;
+  skorozvonProjectOffset = 0;
+  try {
+    await reloadSkorozvonProjectPage();
+    renderPanels();
+    await checkCurrentSkorozvonProjects();
+  } catch (err) {
+    showError(err.message || 'Не удалось найти проекты');
+  }
+}
+
+function onSkorozvonProjectNameInput(value) {
+  skorozvonProjectName = value;
+  clearTimeout(skorozvonProjectNameTimer);
+  skorozvonProjectNameTimer = setTimeout(() => { applySkorozvonProjectSearch(); }, 300);
+}
+
+async function syncSkorozvonProjects() {
+  try {
+    await apiJSON('/rest/skorozvon/projects/sync', { method: 'POST' });
+    fetched.skorozvonProjectsAll = false;
+    await reloadSkorozvonProjectPage();
         renderPanels();
         showToast(activeTab);
       } catch (err) {
-        showError(err.message || 'Не удалось добавить проект');
+    showError(err.message || 'Не удалось синхронизировать проекты');
       }
-    });
-  });
 }
 
 function rootSources() { return DATA.sources.filter(s => s.roditel_id === null); }
@@ -305,56 +998,134 @@ function regionCanonicalList() { return DATA.regionDict.map(d => d.canonical); }
 /* ===== ВКЛАДКИ ===== */
 const TABS = [
   { id:'droblenie', label:'Дробление', section:'routing', impact:'Настройка по каждому источнику — в отдельном окне (кнопка «Настроить»). Пока идёт редактирование, в проде продолжают действовать старые правила; новые вступают в силу только после «Применить изменения». Влияет на определение под-источника (шаг 3 Worker) и метки (шаг 5).' },
-  { id:'partners', label:'Отправка партнёрам', section:'routing', impact:'Каждый блок — самостоятельный набор условий одного покупателя (webhook, регион, стоп-источники). Ошибка ответа Зари никуда не уходит. Изменения влияют на шаг 6 Worker.' },
+  { id:'partners', label:'Отправка партнёрам', section:'routing', impact:'Каждый блок — самостоятельный набор условий одного покупателя (webhook, регион, стоп-источники). Google Sheets здесь же: отдельная карточка таблицы. Ошибка ответа Зари никуда не уходит. Изменения влияют на шаг 6 Worker.' },
   { id:'dupWork', label:'Работа с дублями', section:'routing', impact:'Изменения влияют на: дополнительную отправку в проект Скорозвона для строк-дублей, по региону. Работает параллельно с обычным обзвоном и с отправкой партнёрам.' },
   { id:'uniqWork', label:'Работа с униками', section:'routing', impact:'Изменения влияют на: дополнительную отправку в проект Скорозвона для уникальных строк, по региону. Работает параллельно с обычным обзвоном.' },
   { id:'sources', label:'Источники', section:'dict', impact:'Создание и удаление источников и под-источников (привязанных к родителю). Токен, вкл/выкл приёма и статистика — на вкладке «Интеграции → Входящий трафик». Метки — на вкладке «Дробление».' },
   { id:'operatorDict', label:'Операторы', section:'dict', impact:'Изменения влияют на: как сырое значение оператора от поставщика группируется при обработке строки (шаг 2 Worker), и на выбор группы во вкладке «Дробление». Значение, не найденное ни в одной группе, автоматически попадает в «ДРУГИЕ».', warn:'Изменение состава группы задним числом не пересчитывает уже принятые строки — только новые.' },
+  { id:'bitrixFields', label:'Связка полей (Битрикс)', section:'dict', impact:'Какое поле CDP или Скорозвона уходит в какое поле лида Битрикс при crm.lead.add (шаг 11 Worker). Стадия берётся из справочника crm.status.list. После «Сохранить» применяется к новым отправкам.' },
   { id:'incomingTraffic', label:'Входящий трафик', section:'integrations', impact:'Токен привязывается к корневому источнику и передаётся поставщику для настройки интеграции. Изменение или отключение сразу влияет на приём строк (Метод 1) — отключённый источник отвечает 403 Forbidden.' },
-  { id:'outgoingTraffic', label:'Исходящий трафик', section:'integrations', impact:'Журнал того, что реально ушло партнёрам и в Скорозвон. Только просмотр — настройки самой отправки находятся на вкладках «Отправка партнёрам» и «Проекты Скорозвона».' },
+  { id:'outgoingTraffic', label:'Исходящий трафик', section:'integrations', impact:'Журнал того, что реально ушло партнёрам, в Скорозвон и CRMCalls. Проекты CRMCalls подключаются и подтягиваются здесь. Маршруты — на вкладках «Отправка партнёрам», «Работа с дублями», «Работа с униками».' },
   { id:'skorozvonBitrix', label:'Скорозвон → Битрикс', section:'integrations', impact:'Сколько строк обновилось после webhook от Скорозвона (шаг 10 Worker, статус 4) и сколько из них успешно передано в Битрикс (шаг 11 Worker, статус 5). Только просмотр.' },
-  { id:'regionControl', label:'Регион', section:'enrichment', impact:'Контроль качества определения региона по источникам: как часто регион определяется от поставщика / внешним провайдером / не определяется. Только просмотр.' },
-  { id:'operatorControl', label:'Оператор', section:'enrichment', impact:'Контроль качества определения оператора по источникам: от поставщика / довыяснено через провайдера / не определён (ушло в «Другие»). Только просмотр.' },
+  { id:'regionControl', label:'Регион', section:'enrichment', impact:'Контроль качества определения региона по источникам: как часто регион определяется от поставщика / Россети / не определяется. Только просмотр.' },
+  { id:'operatorControl', label:'Оператор', section:'enrichment', impact:'Контроль качества определения оператора по источникам: от поставщика / Россети / не определён (ушло в «Другие»). Только просмотр.' },
   { id:'zaryaControl', label:'Дедупликация (Заря)', section:'enrichment', impact:'Контроль доли дублей и уников по источникам (результат проверки по Заре, свёрнут до 2 значений). Только просмотр.' },
 ];
 const SECTIONS = [
-  { id:'dict', label:'Справочники' },
-  { id:'integrations', label:'Интеграции' },
-  { id:'enrichment', label:'Обогащение' },
-  { id:'routing', label:'Маршрутизация' },
+  { id:'dict', label:'Справочники', path:'guide' },
+  { id:'integrations', label:'Интеграции', path:'integrations' },
+  { id:'enrichment', label:'Обогащение', path:'analytics' },
+  { id:'routing', label:'Маршрутизация', path:'routing' },
 ];
+const TAB_PATH = {
+  sources: 'sources',
+  operatorDict: 'operators',
+  bitrixFields: 'bitrix',
+  incomingTraffic: 'in',
+  outgoingTraffic: 'out',
+  skorozvonBitrix: 'mapping',
+  regionControl: 'regions',
+  operatorControl: 'operators',
+  zaryaControl: 'dedup',
+  droblenie: 'crushing',
+  partners: 'partners',
+  dupWork: 'duplicate',
+  uniqWork: 'unique',
+};
+const SECTION_BY_PATH = Object.fromEntries(SECTIONS.map(s => [s.path, s.id]));
+const DEFAULT_TAB = 'sources';
+const SETTINGS_BASE = '/settings';
+
 let activeSection = 'dict';
-let activeTab = 'sources';
+let activeTab = DEFAULT_TAB;
+let syncingUrl = false;
+
+function sectionPath(sectionId) {
+  const s = SECTIONS.find(x => x.id === sectionId);
+  return s ? s.path : 'guide';
+}
+function tabPath(tabId) {
+  return TAB_PATH[tabId] || tabId;
+}
+function settingsHref(sectionId, tabId) {
+  return SETTINGS_BASE + '/' + sectionPath(sectionId) + '/' + tabPath(tabId);
+}
+function firstTabInSection(sectionId) {
+  return TABS.find(t => t.section === sectionId) || TABS.find(t => t.id === DEFAULT_TAB);
+}
+function resolveRoute(pathname) {
+  const parts = String(pathname || '').replace(/\/+$/, '').split('/').filter(Boolean);
+  // expected: settings / {section} / {tab}
+  if (parts[0] !== 'settings') {
+    return { sectionId: 'dict', tabId: DEFAULT_TAB, canonical: settingsHref('dict', DEFAULT_TAB) };
+  }
+  if (parts.length === 1) {
+    return { sectionId: 'dict', tabId: DEFAULT_TAB, canonical: settingsHref('dict', DEFAULT_TAB) };
+  }
+  const sectionId = SECTION_BY_PATH[parts[1]] || null;
+  if (!sectionId) {
+    return { sectionId: 'dict', tabId: DEFAULT_TAB, canonical: settingsHref('dict', DEFAULT_TAB) };
+  }
+  if (parts.length === 2) {
+    const tab = firstTabInSection(sectionId);
+    return { sectionId, tabId: tab.id, canonical: settingsHref(sectionId, tab.id) };
+  }
+  const tabSlug = parts[2];
+  const tab = TABS.find(t => t.section === sectionId && TAB_PATH[t.id] === tabSlug);
+  if (!tab) {
+    const fallback = firstTabInSection(sectionId);
+    return { sectionId, tabId: fallback.id, canonical: settingsHref(sectionId, fallback.id) };
+  }
+  return { sectionId, tabId: tab.id, canonical: settingsHref(sectionId, tab.id) };
+}
+function syncSettingsUrl(tabId, { replace = false } = {}) {
+  const tab = TABS.find(t => t.id === tabId);
+  if (!tab) return;
+  const href = settingsHref(tab.section, tab.id);
+  const current = location.pathname.replace(/\/+$/, '') || '/';
+  const target = href.replace(/\/+$/, '');
+  if (current === target) {
+    if (replace) history.replaceState({ tabId }, '', href);
+    return;
+  }
+  if (replace) history.replaceState({ tabId }, '', href);
+  else history.pushState({ tabId }, '', href);
+}
 
 function switchSection(id) {
-  activeSection = id;
-  showTab(TABS.find(t => t.section === id).id);
+  const tab = firstTabInSection(id);
+  showTab(tab.id, { pushUrl: true });
 }
 
 function renderTabs() {
   const tabsInSection = TABS.filter(t => t.section === activeSection);
-  document.getElementById('section-switch').innerHTML = SECTIONS.map(s =>
-    `<button class="section-btn ${s.id===activeSection?'active':''}" onclick="switchSection('${s.id}')">${s.label}</button>`
-  ).join('');
+  document.getElementById('section-switch').innerHTML = SECTIONS.map(s => {
+    const tab = firstTabInSection(s.id);
+    return `<a class="section-btn ${s.id===activeSection?'active':''}" href="${settingsHref(s.id, tab.id)}" data-section="${s.id}">${s.label}</a>`;
+  }).join('');
   document.getElementById('tabs').innerHTML = tabsInSection.map(t =>
-    `<div class="tab ${t.id===activeTab?'active':''}" onclick="switchTab('${t.id}')">${t.label}</div>`
+    `<a class="tab ${t.id===activeTab?'active':''}" href="${settingsHref(t.section, t.id)}" data-tab="${t.id}">${t.label}</a>`
   ).join('');
 }
-function switchTab(id) { showTab(id); }
+function switchTab(id) { showTab(id, { pushUrl: true }); }
 
 const TAB_LOAD = {
-  sources: ['sources', 'operators', 'splits', 'svyazki'],
+  sources: ['sources'],
   incomingTraffic: ['sources'],
   operatorDict: ['operators'],
-  partners: ['sources', 'regions', 'partners'],
+  bitrixFields: ['bitrixMap'],
+  partners: ['sources', 'regions', 'partners', 'googleSheets'],
   droblenie: ['sources', 'operators', 'splits'],
-  outgoingTraffic: ['skorozvonProjects', 'partners'],
-  dupWork: ['sources', 'regions', 'skorozvonProjects', 'svyazki'],
-  uniqWork: ['sources', 'regions', 'skorozvonProjects', 'svyazki'],
+  outgoingTraffic: ['skorozvonProjects', 'partners', 'crmcallsProjects', 'crmcallsSettings'],
+  dupWork: ['sources', 'regions', 'skorozvonProjectsAll', 'crmcallsProjects', 'svyazki'],
+  uniqWork: ['sources', 'regions', 'skorozvonProjectsAll', 'crmcallsProjects', 'svyazki'],
   skorozvonBitrix: ['sources'],
   regionControl: ['sources'],
   operatorControl: ['sources'],
   zaryaControl: ['sources'],
+};
+const TAB_PREFETCH = {
+  sources: ['operators', 'splits', 'svyazki'],
 };
 const LOADERS = {
   sources: loadSources,
@@ -362,37 +1133,77 @@ const LOADERS = {
   partners: loadPartners,
   regions: loadRegions,
   skorozvonProjects: loadSkorozvonProjects,
+  skorozvonProjectsAll: loadAllSkorozvonProjects,
+  crmcallsProjects: loadCrmcallsProjects,
+  crmcallsSettings: loadCrmcallsSettings,
   svyazki: loadSvyazki,
   splits: loadSplits,
+  bitrixMap: loadBitrixMap,
+  googleSheets: loadGoogleSheets,
 };
 const fetched = {};
+const inflight = {};
 let tabLoadGen = 0;
+let tabLoading = false;
 
-async function ensureTabData(tabId) {
-  const names = TAB_LOAD[tabId] || [];
-  for (const name of names) {
-    if (fetched[name]) continue;
-    await LOADERS[name]();
-    fetched[name] = true;
-  }
+function loadNamed(name) {
+  if (fetched[name]) return Promise.resolve();
+  if (inflight[name]) return inflight[name];
+  inflight[name] = LOADERS[name]()
+    .then(() => { fetched[name] = true; })
+    .finally(() => { delete inflight[name]; });
+  return inflight[name];
 }
 
-async function showTab(id) {
+async function ensureTabData(tabId) {
+  await Promise.all((TAB_LOAD[tabId] || []).map(loadNamed));
+}
+
+function prefetchTabData(tabId) {
+  (TAB_PREFETCH[tabId] || []).forEach(name => {
+    loadNamed(name).then(() => {
+      if (activeTab === tabId && !tabLoading) renderPanels();
+    }).catch(() => {});
+  });
+}
+
+function tabDataReady(tabId) {
+  return (TAB_LOAD[tabId] || []).every(name => fetched[name]);
+}
+
+async function showTab(id, opts = {}) {
+  const tab = TABS.find(t => t.id === id);
+  if (!tab) return;
   const gen = ++tabLoadGen;
   activeTab = id;
+  activeSection = tab.section;
   clearError();
+  tabLoading = !tabDataReady(id);
+  if (!syncingUrl) {
+    if (opts.pushUrl) syncSettingsUrl(id, { replace: false });
+    else if (opts.replaceUrl !== false) syncSettingsUrl(id, { replace: true });
+  }
   renderTabs();
   renderPanels();
+  prefetchTabData(id);
   try {
     await ensureTabData(id);
   } catch (err) {
     if (gen !== tabLoadGen) return;
+    tabLoading = false;
     showError(err.message || 'Не удалось загрузить данные');
+    renderPanels();
     return;
   }
   if (gen !== tabLoadGen) return;
+  tabLoading = false;
   renderPanels();
   if (id === 'incomingTraffic') loadIncomingCounts();
+  if (id === 'outgoingTraffic') {
+    loadOutgoingStats();
+    checkCurrentSkorozvonProjects();
+    refreshCrmcallsProjectsCheck();
+  }
   if (id === 'skorozvonBitrix') loadSkorozvonBitrixStats();
   if (id === 'regionControl') loadRegionStats();
   if (id === 'operatorControl') loadOperatorStats();
@@ -554,16 +1365,20 @@ const PANEL_RENDERERS = {
         <div class="partner-summary-row"><span class="k">Стоп-источники</span><span class="v">${stops.length ? stops.length : 'нет'}</span></div>
         <div class="partner-summary-row"><span class="k">Параметры</span><span class="v">${Object.keys(u.body || {}).length || 'нет'}</span></div>
         <div class="partner-summary-row"><span class="k">Content-Type</span><span class="v" style="font-family:monospace; font-size:11.5px;">${u.content_type || 'application/x-www-form-urlencoded'}</span></div>
-        <button class="btn btn-sm" style="margin-top:10px; width:100%;" onclick="openPartnerModal(${u.id})">Настроить</button>
+        <button class="btn btn-sm partner-card-action" onclick="openPartnerModal(${u.id})">Настроить</button>
       </div>`;
     }
     const cardsHTML = DATA.upk.map(summaryCardHTML).join('');
+    const googleHTML = (DATA.googleSheets || []).map(googleSheetCardHTML).join('');
     return {
       customHTML: `
         <div class="partners-lead-note">
           Все покупатели равноправны — приоритета между ними нет. Если строка подходит нескольким сразу, уходит всем одновременно (параллельно). Что принимать — дубль или уникальную строку — настраивается у каждого покупателя. Ошибка ответа Зари никуда не уходит.
         </div>
-        <div class="partner-cards">${cardsHTML}</div>`,
+        <div class="partner-cards">${cardsHTML}${googleHTML}</div>
+        <div style="margin-top:12px;">
+          <button class="btn btn-sm" type="button" onclick="openGoogleSheetModal()">+ Google Sheets</button>
+        </div>`,
       addFn: 'addUpk'
     };
   },
@@ -598,6 +1413,8 @@ const PANEL_RENDERERS = {
       note:'Слева — внутренние группы из БД. Справа — верхний маппинг: сырые названия поставщика и определителя. Не найденное значение уходит в «ДРУГИЕ»; такие сырые строки показываются там, чтобы добавить их в нужную группу.'
     };
   },
+
+  bitrixFields: () => bitrixFieldsRenderer(),
 
   regionDict: () => {
     const rows = DATA.regionDict.map(r => `
@@ -636,9 +1453,12 @@ const PANEL_RENDERERS = {
       headers:['Источник','Токен приёма','Строк за период','Активен'],
       rows, addFn:null,
       customTop: `
-        <div style="display:flex; align-items:flex-end; gap:8px; margin-bottom:12px;">
+        <div class="incoming-toolbar">
+          <div class="incoming-dates">
           <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">С</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${incomingRange.from}" onchange="setIncomingRange('from', this.value)"></div>
           <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">По</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${incomingRange.to}" onchange="setIncomingRange('to', this.value)"></div>
+          </div>
+          ${hintIconBtn('download', 'Документация', 'downloadCRMLeadDocs()')}
         </div>`,
       note:'Токен передаётся поставщику для настройки интеграции. Раздел будет дорабатываться — появятся дополнительные функции управления интеграциями.'
     };
@@ -652,25 +1472,36 @@ const PANEL_RENDERERS = {
       <tr>
         <td>${fmtCheckTime(u.last_date_request)}</td>
         <td>${escAttr(u.nazvanie)}</td>
-        <td>1</td>
+        <td>${outgoingPartnerCount(u.id)}</td>
         <td>
           ${partnerCheckLabel(u)}
           <div style="margin-top:6px;"><button class="btn btn-sm" onclick="sendPartnerTest(${u.id})">Отправить тест</button></div>
         </td>
       </tr>`).join('');
 
-    const projectTotals = {};
-    OUTGOING_LOG.filter(e => e.destinationType === 'skorozvon').forEach(e => {
-      projectTotals[e.destination] = (projectTotals[e.destination] || 0) + e.count;
-    });
     const visibleProjects = projects.filter(p => p.visible);
     const projectRows = visibleProjects.map(p => `
       <tr>
         <td style="font-weight:600; text-align:left;">${p.nazvanie} <span style="color:var(--text-muted); font-family:monospace; font-size:11px;">(${p.project_id})</span></td>
-        <td style="font-weight:600;">${(projectTotals[p.project_id]||0).toLocaleString('ru-RU')}</td>
+        <td style="font-weight:600;">${outgoingSkorozvonCount(p.project_id)}</td>
         <td>${skorozvonCheckLabel(p)}</td>
         <td><button class="btn btn-sm" onclick="sendSkorozvonTest('${String(p.uuid || p.id).replace(/'/g, "\\'")}')">Отправить тест</button></td>
       </tr>`).join('');
+
+    const cc = crmcallsConnection();
+    const ccQuery = (crmcallsProjectName || '').toLowerCase();
+    const ccProjects = (DATA.crmcallsProjects || []).filter(p => {
+      if (!ccQuery) return true;
+      return String(p.name || '').toLowerCase().includes(ccQuery) || String(p.id || '').toLowerCase().includes(ccQuery);
+    });
+    const ccRows = ccProjects.map(p => `
+      <tr>
+        <td style="font-weight:600; text-align:left;">${escAttr(p.name || p.id)} <span style="color:var(--text-muted); font-family:monospace; font-size:11px;">(${escAttr(p.id)})</span></td>
+        <td style="font-weight:600;">${outgoingCrmcallsCount(p.id)}</td>
+        <td>${crmcallsCheckLabel(p)}</td>
+        <td><button class="btn btn-sm" onclick="sendCrmcallsTest('${String(p.id).replace(/'/g, "\\'")}')">Отправить тест</button></td>
+      </tr>`).join('');
+    const ccKeyPlaceholder = cc.has_key ? (cc.api_key_masked || 'ключ сохранён') : 'crmc_live_\u2026';
 
     return {
       headers:['Время проверки активности','Куда','Строк','Статус'],
@@ -683,21 +1514,59 @@ const PANEL_RENDERERS = {
 
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
           <div style="font-size:13px; font-weight:600;">Проверка активности</div>
-          <button class="btn btn-sm" onclick="refreshOutgoingTraffic()">Обновить статус активности</button>
-        </div>
-        <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">Кнопка шлёт проверку во все проекты Скорозвона и тестовую заявку на webhook каждого партнёра. В таблице \u2014 последний ответ.</p>`,
+          ${hintIconBtn('refresh', 'Обновить статус активности', 'refreshOutgoingTraffic()')}
+            </div>
+        <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">Кнопка шлёт проверку во все проекты Скорозвона и CRMCalls и тестовую заявку на webhook каждого партнёра. В таблице \u2014 последний ответ.</p>`,
       customAfter: `
         <div style="margin-top:22px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <div style="font-size:13px; font-weight:600;">Строк по проектам Скорозвона за период</div>
-            <div style="display:flex; gap:6px;">
-              <button class="btn btn-sm" title="Выбрать видимые проекты" onclick="openProjectVisibilityModal()">\u2699\ufe0f Видимость</button>
-              <button class="btn btn-sm" onclick="addSkorozvonProject()">+ Добавить проект</button>
+          <div style="font-size:13px; font-weight:600; margin-bottom:8px;">Строк по проектам Скорозвона за период</div>
+          <div class="proj-toolbar">
+            <input type="search" class="cell-input proj-search" id="skorozvon-project-search" placeholder="Поиск по названию" value="${escAttr(skorozvonProjectName)}" oninput="onSkorozvonProjectNameInput(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();applySkorozvonProjectSearch();}">
+            ${iconBtn('search', 'Найти', 'applySkorozvonProjectSearch()')}
+            <div class="hint-icon-row">
+              ${hintIconBtn('eye', 'Видимость', 'openProjectVisibilityModal()')}
+              ${hintIconBtn('cloud', 'Синхронизировать проекты', 'syncSkorozvonProjects()')}
+          </div>
+          </div>
+          ${projectRows ? `<table><thead><tr><th>Проект</th><th>Строк</th><th>Проверка</th><th></th></tr></thead><tbody>${projectRows}</tbody></table>` : '<p style="color:var(--text-muted); font-size:13px;">Нет проектов \u2014 измените поиск или синхронизируйте проекты.</p>'}
+          <div class="proj-pager">
+            <span>${skorozvonProjectPagerInfo()}</span>
+            <button class="btn btn-sm" ${skorozvonProjectOffset <= 0 ? 'disabled' : ''} onclick="shiftSkorozvonProjectPage(-${SKOROZVON_PROJECT_PAGE})" aria-label="Предыдущая страница">&lt;</button>
+            <button class="btn btn-sm" ${skorozvonProjectOffset + SKOROZVON_PROJECT_PAGE >= skorozvonProjectTotal ? 'disabled' : ''} onclick="shiftSkorozvonProjectPage(${SKOROZVON_PROJECT_PAGE})" aria-label="Следующая страница">&gt;</button>
+          </div>
+        </div>
+
+        <div style="margin-top:28px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:12px;">
+            <div style="font-size:13px; font-weight:600;">Подключение CRMCalls</div>
+            <span class="status-pill ${cc.has_key ? 'on' : 'off'}">${cc.has_key ? 'подключено' : 'нет ключа'}</span>
+        </div>
+          <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">Ключ из кабинета CRMCalls. После «Подключить» подтянем проекты \u2014 они появятся в селекте связок дубли/уники.</p>
+          <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;">
+            <div class="field" style="flex:1; min-width:240px;">
+              <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">API-ключ</label>
+              <input type="password" class="cell-input" style="border:1px solid var(--border-strong); font-family:monospace;" value="${escAttr(crmcallsKeyDraft)}" placeholder="${escAttr(ccKeyPlaceholder)}" oninput="crmcallsKeyDraft=this.value" autocomplete="off">
+            </div>
+            <div class="field" style="width:260px;">
+              <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">Host</label>
+              <input class="cell-input" style="border:1px solid var(--border-strong);" value="${escAttr(crmcallsBaseDraft || cc.base_url || 'https://cc.crmcalls.ru')}" oninput="crmcallsBaseDraft=this.value">
+            </div>
+            <button class="btn btn-primary" ${crmcallsConnecting ? 'disabled' : ''} onclick="connectCrmcalls()">${crmcallsConnecting ? 'Подключаем\u2026' : (cc.has_key ? 'Обновить и подтянуть' : 'Подключить')}</button>
+          </div>
+        </div>
+
+        <div style="margin-top:22px;">
+          <div style="font-size:13px; font-weight:600; margin-bottom:8px;">Проекты CRMCalls</div>
+          <div class="proj-toolbar">
+            <input type="search" class="cell-input proj-search" placeholder="Поиск по названию или UUID" value="${escAttr(crmcallsProjectName)}" oninput="crmcallsProjectName=this.value" onkeydown="if(event.key==='Enter'){event.preventDefault();renderPanels();}">
+            ${iconBtn('search', 'Найти', 'renderPanels()')}
+            <div class="hint-icon-row">
+              ${hintIconBtn('cloud', 'Синхронизировать проекты CRMCalls', 'syncCrmcallsProjects()')}
             </div>
           </div>
-          ${projectRows ? `<table><thead><tr><th>Проект</th><th>Строк</th><th>Проверка</th><th></th></tr></thead><tbody>${projectRows}</tbody></table>` : '<p style="color:var(--text-muted); font-size:13px;">Нет видимых проектов \u2014 настройте видимость (\u2699\ufe0f) или добавьте проект.</p>'}
+          ${ccRows ? `<table><thead><tr><th>Проект</th><th>Строк</th><th>Проверка</th><th></th></tr></thead><tbody>${ccRows}</tbody></table>` : '<p style="color:var(--text-muted); font-size:13px;">Нет проектов \u2014 подключите CRMCalls или синхронизируйте.</p>'}
         </div>`,
-      note:'Проверка активности дергает реальные хуки. Настройка маршрутов \u2014 на вкладках «Отправка партнёрам», «Работа с дублями», «Работа с униками».'
+      note:'Число строк — успешные отправки из dispatch за выбранный период. Проекты CRMCalls подключаются здесь и сразу попадают в селект связок. Настройка маршрутов \u2014 на вкладках «Отправка партнёрам», «Работа с дублями», «Работа с униками».'
     };
   },
 
@@ -728,9 +1597,9 @@ const PANEL_RENDERERS = {
     range: regionRange,
     setFrom: 'setRegionRange',
     setTo: 'setRegionRange',
-    headers: ['Источник', 'От поставщика', 'Внешний провайдер', 'Не определён'],
+    headers: ['Источник', 'От поставщика', 'Россети', 'Не определён'],
     cellsFn: id => geoStatCells(regionStats, regionRange, id, 'region'),
-    note: 'Доли по тому, как воркер проставил регион: от поставщика, через внешний провайдер или не определил. Высокая доля «Не определён» (выделено) — сигнал проверить, шлёт ли источник регион и работает ли провайдер.',
+    note: 'Доли по тому, как воркер проставил регион: от поставщика, через Россети или не определил. Высокая доля «Не определён» (выделено) — сигнал проверить, шлёт ли источник регион и работает ли Россети.',
   }),
 
   operatorControl: () => enrichmentPanel({
@@ -738,7 +1607,7 @@ const PANEL_RENDERERS = {
     range: operatorRange,
     setFrom: 'setOperatorRange',
     setTo: 'setOperatorRange',
-    headers: ['Источник', 'От поставщика', 'Довыяснено через провайдера', 'Не определён (в «Другие»)'],
+    headers: ['Источник', 'От поставщика', 'Россети', 'Не определён (в «Другие»)'],
     cellsFn: id => geoStatCells(operatorStats, operatorRange, id, 'operator'),
     note: 'Доли по тому, как воркер проставил оператора. «Не определён» — пустой или несмапленный оператор, он уходит в «Другие». Высокая доля (выделено) — проверить справочник «Операторы».',
   }),
@@ -806,7 +1675,7 @@ function enrichmentPanel(opts) {
         <td style="font-weight:600; text-align:left;">${escAttr(root.nazvanie)}</td>
         ${opts.cellsFn(root.id)}
       </tr>`).join('');
-  return {
+    return {
     headers: opts.headers,
     rows,
     addFn: null,
@@ -1037,13 +1906,56 @@ function trafficStatsForRange(sourceId, from, to) {
   const perDay = (seed % 40) + 5;
   return perDay * days;
 }
-let outgoingRange = { from: '2026-08-14', to: '2026-08-20' };
-function setOutgoingRange(field, value) { outgoingRange[field] = value; renderPanels(); }
+let outgoingRange = defaultIncomingRange();
+let outgoingStats = { key: '', loading: true, error: '', partners: {}, skorozvon: {}, crmcalls: {} };
+let outgoingStatsGen = 0;
+function outgoingRangeKey() { return outgoingRange.from + '|' + outgoingRange.to; }
+function outgoingCountCell(map, id) {
+  if (outgoingStats.loading || outgoingStats.key !== outgoingRangeKey()) {
+    return '<span class="count-spinner" title="Загрузка"></span>';
+  }
+  if (outgoingStats.error) {
+    return '<span style="color:var(--text-muted); font-weight:500;" title="' + escAttr(outgoingStats.error) + '">\u2014</span>';
+  }
+  return (map[id] || 0).toLocaleString('ru-RU');
+}
+function outgoingPartnerCount(id) { return outgoingCountCell(outgoingStats.partners, id); }
+function outgoingSkorozvonCount(projectId) { return outgoingCountCell(outgoingStats.skorozvon, String(projectId)); }
+function outgoingCrmcallsCount(projectId) { return outgoingCountCell(outgoingStats.crmcalls, String(projectId)); }
+async function loadOutgoingStats() {
+  const key = outgoingRangeKey();
+  const gen = ++outgoingStatsGen;
+  outgoingStats = { key, loading: true, error: '', partners: {}, skorozvon: {}, crmcalls: {} };
+  if (activeTab === 'outgoingTraffic') renderPanels();
+  try {
+    const q = 'date_from=' + encodeURIComponent(outgoingRange.from) + '&date_to=' + encodeURIComponent(outgoingRange.to);
+    const data = await apiJSON('/rest/leads/outgoing-stats?' + q);
+    if (gen !== outgoingStatsGen) return;
+    const partners = {};
+    (data.partners || []).forEach(item => { partners[item.partner_id] = item.count || 0; });
+    const skorozvon = {};
+    (data.skorozvon || []).forEach(item => { skorozvon[String(item.project_id)] = item.count || 0; });
+    const crmcalls = {};
+    (data.crmcalls || []).forEach(item => { crmcalls[String(item.project_id)] = item.count || 0; });
+    outgoingStats = { key, loading: false, error: '', partners, skorozvon, crmcalls };
+  } catch (err) {
+    if (gen !== outgoingStatsGen) return;
+    outgoingStats = { key, loading: false, error: err.message || 'Не удалось загрузить строки', partners: {}, skorozvon: {}, crmcalls: {} };
+  }
+  if (activeTab === 'outgoingTraffic') renderPanels();
+}
+function setOutgoingRange(field, value) {
+  outgoingRange[field] = value;
+  loadOutgoingStats();
+}
 function fmtCheckTime(raw) {
   if (!raw) return '\u2014';
   return String(raw).replace('T', ' ').replace(/\.\d+Z?$/, '').replace('Z', '');
 }
 function skorozvonCheckLabel(p) {
+  if (skorozvonProjectChecking && !p.last_date_request) {
+    return '<span class="status-pill">проверка…</span>';
+  }
   if (!p.last_date_request) return '\u2014';
   const ok = p.last_request === true;
   const when = fmtCheckTime(p.last_date_request);
@@ -1116,12 +2028,17 @@ function partnerCheckLabel(u) {
 }
 async function refreshOutgoingTraffic() {
   try {
-    showTestToast('Проверяем Скорозвон и партнёров\u2026');
+    showTestToast('Проверяем Скорозвон, CRMCalls и партнёров\u2026');
     const results = await Promise.allSettled([
       apiJSON('/rest/skorozvon/projects/refresh', { method: 'POST' }),
       apiJSON('/rest/partners/refresh', { method: 'POST' }),
+      apiJSON('/rest/crmcalls/projects/refresh', { method: 'POST' }),
     ]);
-    await Promise.all([loadSkorozvonProjects(), loadPartners()]);
+    fetched.skorozvonProjects = false;
+    fetched.crmcallsProjects = false;
+    await Promise.all([loadSkorozvonProjects(), loadPartners(), loadCrmcallsProjects()]);
+    fetched.skorozvonProjects = true;
+    fetched.crmcallsProjects = true;
     renderPanels();
     const failed = results.filter(r => r.status === 'rejected');
     if (failed.length === results.length) {
@@ -1214,38 +2131,48 @@ function openProjectVisibilityModal() {
       </div>
     </div>`;
   document.body.appendChild(overlay);
+  const box = document.getElementById('projvis-list');
+  box.innerHTML = '<div class="page-loading"><span class="page-spinner" aria-hidden="true"></span>Загрузка…</div>';
+  loadAllSkorozvonProjects().then(() => {
+    fetched.skorozvonProjectsAll = true;
   renderProjectVisibilityList();
+  }).catch(err => {
+    box.textContent = err.message || 'Не удалось загрузить проекты';
+  });
 }
 function renderProjectVisibilityList() {
   const box = document.getElementById('projvis-list');
   if (!box) return;
-  box.innerHTML = DATA.skorozvonProjects.map(p => `
+  const items = skorozvonProjectCatalog();
+  box.innerHTML = items.map(p => `
     <label style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed var(--border); font-size:13px;">
       <input type="checkbox" data-proj="${p.id}" ${p.visible?'checked':''}>
       <span>${p.nazvanie} <span style="color:var(--text-muted); font-family:monospace; font-size:11px;">(${p.project_id})</span></span>
-    </label>`).join('');
+    </label>`).join('') || '<p style="color:var(--text-muted); font-size:13px;">Нет проектов</p>';
 }
 function applyProjectVisibility() {
+  hiddenSkorozvonProjectIDs.clear();
   document.querySelectorAll('#projvis-list input[type=checkbox]').forEach(cb => {
-    const proj = DATA.skorozvonProjects.find(p => String(p.id) === String(cb.dataset.proj));
-    if (proj) proj.visible = cb.checked;
+    if (!cb.checked) hiddenSkorozvonProjectIDs.add(cb.dataset.proj);
   });
+  (DATA.skorozvonProjects || []).forEach(p => { p.visible = !hiddenSkorozvonProjectIDs.has(p.id); });
+  (DATA.skorozvonProjectsAll || []).forEach(p => { p.visible = !hiddenSkorozvonProjectIDs.has(p.id); });
   document.getElementById('projvis-overlay').remove();
   renderPanels();
   showToast(activeTab);
 }
-const OUTGOING_LOG = [
-  { time:'20.08 14:32', destinationType:'partner', destination:'КР', count:42, ok:true, responseCode:'200 OK', responseMessage:'Принято партнёром', comment:'' },
-  { time:'20.08 14:20', destinationType:'skorozvon', destination:'proj-2001', count:118, ok:true, responseCode:'200 OK', responseMessage:'assign_leads выполнен', comment:'' },
-  { time:'20.08 13:55', destinationType:'partner', destination:'ББ', count:19, ok:true, responseCode:'200 OK', responseMessage:'Принято партнёром', comment:'' },
-  { time:'20.08 13:40', destinationType:'skorozvon', destination:'proj-4410', count:7, ok:false, responseCode:'500', responseMessage:'Internal Server Error', comment:'Таймаут соединения, повтор через 30 мин' },
-  { time:'20.08 12:10', destinationType:'partner', destination:'РТ', count:63, ok:true, responseCode:'200 OK', responseMessage:'Принято партнёром', comment:'' },
-  { time:'20.08 11:45', destinationType:'skorozvon', destination:'proj-2010', count:54, ok:true, responseCode:'200 OK', responseMessage:'assign_leads выполнен', comment:'' },
-];
 
 function renderPanels() {
   const wrap = document.getElementById('panels');
   const t = TABS.find(x => x.id === activeTab);
+  if (tabLoading) {
+    wrap.innerHTML = `
+      <div class="panel">
+        <div class="panel-head"><p class="panel-title">${t.label}</p></div>
+        <div class="page-loading"><span class="page-spinner" aria-hidden="true"></span>Загрузка…</div>
+      </div>`;
+    return;
+  }
   const res = PANEL_RENDERERS[activeTab]();
   const bodyHTML = (res.customTop || '') + (res.customHTML
     ? res.customHTML
@@ -1267,6 +2194,7 @@ function renderPanels() {
       <div class="save-toast" id="toast-${activeTab}">Сохранено — применяется к новым строкам сразу.</div>
     </div>
   `;
+  if (activeTab === 'bitrixFields') bindBitrixMapCombos();
 }
 
 /* ===== МУТАЦИИ ===== */
@@ -1430,9 +2358,19 @@ function showCopyToast(label) {
 const ICON_SVG = {
   copy: '<rect x="7" y="7" width="10" height="10" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M4 13V4a1 1 0 0 1 1-1h9" stroke="currentColor" stroke-width="1.4"/>',
   plus: '<path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
-  refresh: '<path d="M16.2 8.2A6 6 0 1 0 16 12.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M16.2 4.6v4h-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
+  refresh: '<path d="M4.2 10a5.8 5.8 0 0 1 9.7-4.3L15.5 7.2M15.8 10a5.8 5.8 0 0 1-9.7 4.3L4.5 12.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M11.8 7.2h3.7V3.6M8.2 12.8H4.5v3.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
   trash: '<path d="M4 6h12M8 6V4h4v2M6 6l.7 10h6.6L14 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
+  eye: '<path d="M2.2 10S5.4 4.5 10 4.5 17.8 10 17.8 10 14.6 15.5 10 15.5 2.2 10 2.2 10z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="10" cy="10" r="2.3" stroke="currentColor" stroke-width="1.5"/>',
+  cloud: '<path d="M6.1 14.6h7.7a3.2 3.2 0 0 0 .35-6.38 4.15 4.15 0 0 0-8.05-1.15A3.15 3.15 0 0 0 6.1 14.6z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>',
+  search: '<circle cx="8.6" cy="8.6" r="4.4" stroke="currentColor" stroke-width="1.6"/><path d="M12 12.2L16.4 16.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  download: '<path d="M10 3.4v9.2M6.6 9.4L10 12.8l3.4-3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16.4h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  layers: '<rect x="5.5" y="8.2" width="11" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.4"/><path d="M3.5 6.2h11M7.5 3.8h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+  hash: '<path d="M7.2 3.5L5.5 16.5M14.5 3.5L12.8 16.5M3.8 7.8h12.4M3.8 12.2h12.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  pin: '<path d="M10 17.2s-5.2-4.1-5.2-8a5.2 5.2 0 1 1 10.4 0c0 3.9-5.2 8-5.2 8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="10" cy="9" r="1.8" stroke="currentColor" stroke-width="1.4"/>',
 };
+function metaIcon(name) {
+  return `<svg width="12" height="12" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${ICON_SVG[name]}</svg>`;
+}
 function onTokenAction(action, id) {
   id = Number(id);
   if (action === 'generate') confirmGenerateToken(id);
@@ -1447,6 +2385,34 @@ function iconBtn(name, title, onclick, kind) {
   const cls = kind ? `copy-icon-btn icon-btn-${kind}` : 'copy-icon-btn';
   return `<button type="button" class="${cls}" title="${title}" onclick="${onclick}">
     <svg width="14" height="14" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">${ICON_SVG[name]}</svg>
+  </button>`;
+}
+async function downloadCRMLeadDocs() {
+  try {
+    const res = await fetch(API + '/rest/docs/crm.lead.add.docx');
+    const buf = await res.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    if (!res.ok || bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+      showError('Документация недоступна');
+      return;
+    }
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'crm-lead-add.docx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showError(err.message || 'Не удалось скачать документацию');
+  }
+}
+function hintIconBtn(name, label, onclick) {
+  return `<button type="button" class="hint-icon-btn" aria-label="${escAttr(label)}" onclick="${onclick}">
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${ICON_SVG[name]}</svg>
+    <span class="hint-icon-label">${escAttr(label)}</span>
   </button>`;
 }
 function copyIconBtn(text, label) {
@@ -2039,9 +3005,13 @@ async function removeOperatorAlias(id, idx) {
 function addSourceForm() {
   customPrompt('Название нового источника:', (name) => {
     if (!name) return;
-    DATA.sources.push({ id:nextId.sources++, nazvanie:name, bitrix_code:'', token:'new-token-' + nextId.sources, roditel_id:null, metka_holodnaya:'', metka_kakaya:'', aktiven:true });
-    renderPanels();
-    showToast(activeTab);
+    confirmChange(
+      `Создать источник «${name}»?`,
+      async () => {
+        const created = await createParentSource(name);
+        DATA.sources.push(mapSource(created));
+      }
+    );
   });
 }
 function addDroblenie() { const s = rootSources()[0]; DATA.droblenie.push({ id:nextId.droblenie++, source_id:s.id, operator_group:operatorGroups()[0], pod_source_id:(childrenOf(s.id)[0]||s).id }); renderPanels(); }
@@ -2056,17 +3026,32 @@ function svyazkaRootId(s) {
   return ps ? ps.roditel_id : null;
 }
 function svyazkaCardHTML(s) {
-  const podNames = s.pod_source_ids.map(sourceName).join(', ');
+  const podNames = s.pod_source_ids.map(sourceName).join(', ') || '\u2014';
+  const regionLabel = (s.region_ids || []).length ? s.region_ids.length + ' в списке' : 'все';
   return `
   <div class="partner-card">
     <div class="partner-card-head">
-      <span style="font-size:15px; font-weight:600; display:flex; align-items:center; gap:6px;">${s.nazvanie} <button class="edit-pencil-btn" title="Переименовать" onclick="renameSvyazka(${s.id})">\u270E</button></span>
+      <span style="font-size:15px; font-weight:600; display:flex; align-items:center; gap:6px; min-width:0; word-break:break-word;">${s.nazvanie} <span style="font-size:11px; font-weight:500; color:var(--text-muted);">${svyazkaProviderLabel(s)}</span> <button class="edit-pencil-btn" title="Переименовать" onclick="renameSvyazka('${svyazkaProvider(s)}', ${s.id})">\u270E</button></span>
       <span class="status-pill ${svyazkaKind(s)==='standard' ? 'on' : 'off'}">${svyazkaKind(s)==='standard' ? 'Стандартная' : 'Кастомная'}</span>
     </div>
-    <div class="partner-summary-row"><span class="k">Под-источники</span><span class="v" style="text-align:right; max-width:60%;">${podNames}</span></div>
-    <div class="partner-summary-row"><span class="k">Проект</span><span class="v" style="font-family:monospace; font-size:11.5px;">${s.project_id || '\u2014'}</span></div>
-    <div class="partner-summary-row"><span class="k">Регион</span><span class="v">${(s.region_ids || []).length ? s.region_ids.length + ' в списке' : 'все'}</span></div>
-    <button class="btn btn-sm" style="margin-top:10px; width:100%;" onclick="openSvyazkaModal(${s.id})">Настроить</button>
+    <div class="partner-meta">
+      <div class="partner-meta-item">
+        <span class="partner-meta-label">${metaIcon('layers')} Под-источники</span>
+        <span class="partner-meta-value">${podNames}</span>
+      </div>
+      <div class="partner-meta-item">
+        <span class="partner-meta-label">${metaIcon('hash')} Проект</span>
+        <span class="partner-meta-value" style="font-family:monospace; font-size:11.5px;">${s.project_id || '\u2014'}</span>
+      </div>
+      <div class="partner-meta-item">
+        <span class="partner-meta-label">${metaIcon('pin')} Регион</span>
+        <span class="partner-meta-value">${regionLabel}</span>
+      </div>
+    </div>
+    <div class="partner-card-actions">
+      <button class="btn btn-sm partner-card-action" onclick="openSvyazkaModal('${svyazkaProvider(s)}', ${s.id})">Настроить</button>
+      <button class="btn btn-sm btn-danger partner-card-action" onclick="confirmDeleteSvyazka('${svyazkaProvider(s)}', ${s.id})">Удалить</button>
+    </div>
   </div>`;
 }
 function svyazkiTabRenderer(type) {
@@ -2103,7 +3088,7 @@ function svyazkiTabRenderer(type) {
   return {
     customHTML: `
       <div class="partners-lead-note">
-        Связка = набор под-источников (1 \u2014 стандартная, 2+ \u2014 кастомная) + необязательный фильтр по региону (пусто = подходят все) \u2192 один проект Скорозвона для ${label}. Если строка подходит под условия нескольких связок сразу \u2014 уходит во все параллельно. Если не подошла ни под одну \u2014 просто остаётся в БД, без доп. отправки.
+        Связка = набор под-источников (1 \u2014 стандартная, 2+ \u2014 кастомная) + необязательный фильтр по региону (пусто = подходят все) \u2192 один проект Скорозвона или CRMCalls для ${label}. Площадку выбираете при создании связки. Если строка подходит под условия нескольких связок сразу \u2014 уходит во все параллельно. Если не подошла ни под одну \u2014 просто остаётся в БД, без доп. отправки.
       </div>
       <div style="font-size:13px; font-weight:600; margin-bottom:8px;">Стандартные (по источникам)</div>
       ${standardHTML || '<p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">Стандартных связок пока нет.</p>'}
@@ -2115,11 +3100,22 @@ function svyazkiTabRenderer(type) {
 }
 
 let svyazkaModalId = null; // null = создание новой
+let svyazkaModalProvider = 'skorozvon';
 let svyazkaDraft = null;
 let svyazkaEditing = false;
 
-function openSvyazkaModal(id) {
-  svyazkaModalId = (typeof id === 'number') ? id : null;
+function openSvyazkaModal(provider, id) {
+  if (arguments.length === 1 && typeof provider !== 'string') {
+    id = provider;
+    provider = 'skorozvon';
+  }
+  if (id === undefined || id === null || id === '') {
+    svyazkaModalId = null;
+    svyazkaModalProvider = 'skorozvon';
+  } else {
+    svyazkaModalId = Number(id);
+    svyazkaModalProvider = provider === 'crmcalls' ? 'crmcalls' : 'skorozvon';
+  }
   svyazkaEditing = false;
   svyazkaDraft = null;
   document.getElementById('svyazka-overlay').classList.add('show');
@@ -2127,24 +3123,31 @@ function openSvyazkaModal(id) {
     document.getElementById('svyazka-modal-title').textContent = activeTab === 'dupWork' ? 'Новая связка (дубли)' : 'Новая связка (уники)';
     enterSvyazkaEditMode();
   } else {
-    const s = DATA.svyazki.find(x => x.id === svyazkaModalId);
-    document.getElementById('svyazka-modal-title').textContent = s.nazvanie;
+    const s = findSvyazka(svyazkaModalProvider, svyazkaModalId);
+    document.getElementById('svyazka-modal-title').textContent = s ? s.nazvanie : 'Связка';
     renderSvyazkaModal();
   }
 }
 function closeSvyazkaModal(discard) {
   document.getElementById('svyazka-overlay').classList.remove('show');
-  svyazkaModalId = null; svyazkaDraft = null; svyazkaEditing = false;
+  svyazkaModalId = null; svyazkaModalProvider = 'skorozvon'; svyazkaDraft = null; svyazkaEditing = false;
 }
 function enterSvyazkaEditMode() {
   svyazkaEditing = true;
   if (svyazkaModalId === null) {
-    svyazkaDraft = { nazvanie: '', pod_source_ids: [], project_id: '', region_ids: [], type: (activeTab === 'uniqWork' ? 'uniq' : 'dup') };
+    svyazkaDraft = { nazvanie: '', provider: 'skorozvon', pod_source_ids: [], project_id: '', region_ids: [], type: (activeTab === 'uniqWork' ? 'uniq' : 'dup') };
   } else {
-    const s = DATA.svyazki.find(x => x.id === svyazkaModalId);
-    svyazkaDraft = { nazvanie: s.nazvanie, pod_source_ids: s.pod_source_ids.slice(), project_id: s.project_id, region_ids: (s.region_ids || []).slice(), type: s.type };
+    const s = findSvyazka(svyazkaModalProvider, svyazkaModalId);
+    svyazkaDraft = { nazvanie: s.nazvanie, provider: svyazkaProvider(s), pod_source_ids: s.pod_source_ids.slice(), project_id: s.project_id, region_ids: (s.region_ids || []).slice(), type: s.type };
   }
   document.getElementById('svyazka-apply-btn').textContent = svyazkaModalId === null ? 'Создать связку' : 'Применить изменения';
+  renderSvyazkaModal();
+}
+function draftSvyazkaProvider(value) {
+  const next = value === 'crmcalls' ? 'crmcalls' : 'skorozvon';
+  if (svyazkaDraft.provider === next) return;
+  svyazkaDraft.provider = next;
+  svyazkaDraft.project_id = '';
   renderSvyazkaModal();
 }
 function draftSvyazkaField(field, value) { svyazkaDraft[field] = value; }
@@ -2159,25 +3162,33 @@ function renderSvyazkaModal() {
   document.getElementById('svyazka-edit-banner').classList.toggle('show', svyazkaEditing && svyazkaModalId !== null);
   document.getElementById('svyazka-btn-edit').style.display = (!svyazkaEditing && svyazkaModalId !== null) ? 'inline-block' : 'none';
   document.getElementById('svyazka-edit-actions').style.display = svyazkaEditing ? 'flex' : 'none';
+  const delBtn = document.getElementById('svyazka-btn-delete');
+  if (delBtn) delBtn.style.display = svyazkaModalId !== null ? 'inline-block' : 'none';
 
   if (!svyazkaEditing) {
-    const s = DATA.svyazki.find(x => x.id === svyazkaModalId);
+    const s = findSvyazka(svyazkaModalProvider, svyazkaModalId);
     box.innerHTML = `
       <div class="partner-field"><label>Название</label><span class="cell-static">${s.nazvanie}</span></div>
+      <div class="partner-field"><label>Площадка</label><span class="cell-static">${svyazkaProviderLabel(s)}</span></div>
       <div class="partner-field"><label>Тип связки</label><span class="cell-static">${svyazkaKind(s)==='standard' ? 'Стандартная (1 под-источник)' : 'Кастомная (' + s.pod_source_ids.length + ' под-источников)'}</span></div>
       <div class="partner-field"><label>Под-источники</label><span class="cell-static">${s.pod_source_ids.map(sourceName).join(', ') || '\u2014'}</span></div>
-      <div class="partner-field"><label>Проект Скорозвона</label><span class="cell-static">${(DATA.skorozvonProjects.find(pr => String(pr.project_id) === String(s.project_id))?.nazvanie) || '\u2014'} <span style="font-family:monospace; color:var(--text-muted);">(${s.project_id})</span></span></div>
+      <div class="partner-field"><label>Проект ${svyazkaProviderLabel(s)}</label><span class="cell-static">${svyazkaProjectTitle(s) || '\u2014'}</span></div>
       <div class="partner-field"><label>Регионы</label><span class="cell-static">${(s.region_ids || []).map(regionName).join(', ') || 'все (фильтр не задан)'}</span></div>
       <div class="partner-field"><label>Поток</label><span class="cell-static">${s.type === 'dup' ? 'Работа с дублями' : 'Работа с униками'}</span></div>
     `;
     return;
   }
 
+  const isCrmcalls = svyazkaProvider(svyazkaDraft) === 'crmcalls';
+  const projectOptions = isCrmcalls
+    ? crmcallsProjectCatalog().map(pr => ({ value: pr.id, label: `${pr.name || pr.id} (${pr.id})` }))
+    : skorozvonProjectCatalog().map(pr => ({ value: pr.project_id, label: `${pr.nazvanie} (${pr.project_id})` }));
+
   const cAddRegion = 'svyazka-add-reg';
   registerCombo(cAddRegion, (DATA.regions || []).filter(r => !(svyazkaDraft.region_ids || []).includes(r.id)).map(r => ({ value: r.id, label: r.name })), v => draftSvyazkaRegionAdd(parseInt(v, 10)));
 
   const cProject = 'svyazka-project';
-  registerCombo(cProject, DATA.skorozvonProjects.map(pr => ({ value: pr.project_id, label: `${pr.nazvanie} (${pr.project_id})` })), v => {
+  registerCombo(cProject, projectOptions, v => {
     draftSvyazkaField('project_id', v);
     renderSvyazkaModal();
   });
@@ -2194,6 +3205,14 @@ function renderSvyazkaModal() {
       <input class="cell-input" style="border:1px solid var(--border-strong);" value="${svyazkaDraft.nazvanie}" placeholder="Например: ВР Билайн" onchange="draftSvyazkaField('nazvanie', this.value)">
     </div>
     <div class="partner-field">
+      <label>Площадка ${helpIcon('Скорозвон и CRMCalls \u2014 отдельные очереди. После создания связки площадку сменить нельзя, только удалить и завести новую.')}</label>
+      ${svyazkaModalId === null ? `
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="btn ${!isCrmcalls ? 'btn-primary' : ''}" onclick="draftSvyazkaProvider('skorozvon')">Скорозвон</button>
+        <button type="button" class="btn ${isCrmcalls ? 'btn-primary' : ''}" onclick="draftSvyazkaProvider('crmcalls')">CRMCalls</button>
+      </div>` : `<span class="cell-static">${svyazkaProviderLabel(svyazkaDraft)}</span>`}
+    </div>
+    <div class="partner-field">
       <label>Под-источники ${helpIcon('Один под-источник \u2014 стандартная связка. Два и более \u2014 кастомная (объединяет несколько под-источников под один проект).')} <span class="status-pill ${kindLabel==='Стандартная'?'on':'off'}" style="margin-left:6px;">${kindLabel}</span></label>
       <div class="tag-list">
         ${svyazkaDraft.pod_source_ids.map(id => `<span class="tag">${sourceName(id)}<span class="tag-x" onclick="draftSvyazkaPodSourceRemove(${id})">&times;</span></span>`).join('') || '<span style="color:var(--text-muted); font-size:12px;">не выбрано ни одного</span>'}
@@ -2201,8 +3220,9 @@ function renderSvyazkaModal() {
       <div style="margin-top:6px; width:220px;">${comboHTML(cAddPodSource, '', '+ добавить под-источник')}</div>
     </div>
     <div class="partner-field">
-      <label>Проект Скорозвона ${helpIcon('Worker вызовет assignToProject с этим project_id для строк, попавших в эту связку. Список проектов \u2014 из «Интеграции \u2192 Исходящий трафик», единый реестр.')}</label>
-      ${comboHTML(cProject, svyazkaDraft.project_id ? (DATA.skorozvonProjects.find(pr => String(pr.project_id) === String(svyazkaDraft.project_id))?.nazvanie + ' (' + svyazkaDraft.project_id + ')') : '', 'Выбрать проект из реестра')}
+      <label>Проект ${isCrmcalls ? 'CRMCalls' : 'Скорозвона'} ${helpIcon(isCrmcalls ? 'Список проектов \u2014 из «Интеграции \u2192 Исходящий трафик»: подключите CRMCalls и подтяните проекты. Можно вставить UUID вручную. Worker создаст/обновит контакт POST /api/v1/contacts.' : 'Worker вызовет assignToProject с этим project_id для строк, попавших в эту связку. Список проектов \u2014 из «Интеграции \u2192 Исходящий трафик», единый реестр.')}</label>
+      ${comboHTML(cProject, svyazkaDraft.project_id ? svyazkaProjectTitle(svyazkaDraft) : '', isCrmcalls ? 'Выбрать проект CRMCalls' : 'Выбрать проект из реестра')}
+      ${isCrmcalls ? `<input class="cell-input" style="margin-top:6px; border:1px solid var(--border-strong); font-family:monospace; font-size:12px;" value="${escAttr(svyazkaDraft.project_id || '')}" placeholder="UUID проекта CRMCalls" onchange="draftSvyazkaField('project_id', this.value.trim()); renderSvyazkaModal();">` : ''}
     </div>
     <div class="partner-field">
       <label>Регионы ${helpIcon('Включающий фильтр: если список пуст \u2014 подходят строки из любого региона. Если не пуст \u2014 только перечисленные.')}</label>
@@ -2217,12 +3237,28 @@ function renderSvyazkaModal() {
     </div>
   `;
 }
-function renameSvyazka(id) {
-  const s = DATA.svyazki.find(x => x.id === id);
+function confirmDeleteSvyazka(provider, id) {
+  if (arguments.length === 1) { id = provider; provider = svyazkaModalProvider || 'skorozvon'; }
+  const s = findSvyazka(provider, id);
+  if (!s) return;
+  const flow = s.type === 'dup' ? 'дублей' : 'уников';
+  confirmChange(
+    `Удалить связку «${s.nazvanie}»? Новые ${flow} по этим под-источникам больше не уйдут в ${svyazkaProviderLabel(s)} (${s.project_id || 'проект'}).`,
+    async () => {
+      await apiJSON(svyazkaApiPath(s) + '/' + s.id, { method: 'DELETE' });
+      DATA.svyazki = DATA.svyazki.filter(x => !(svyazkaProvider(x) === svyazkaProvider(s) && Number(x.id) === Number(s.id)));
+      if (svyazkaModalId === s.id && svyazkaModalProvider === svyazkaProvider(s)) closeSvyazkaModal(false);
+    }
+  );
+}
+function renameSvyazka(provider, id) {
+  if (arguments.length === 1) { id = provider; provider = 'skorozvon'; }
+  const s = findSvyazka(provider, id);
+  if (!s) return;
   customPrompt('Новое название связки:', async (name) => {
     if (!name) return;
     try {
-      await apiJSON('/rest/skorozvon/links/' + s.id, {
+      await apiJSON(svyazkaApiPath(s) + '/' + s.id, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(svyazkaPayload({ ...s, nazvanie: name })),
@@ -2238,26 +3274,27 @@ function renameSvyazka(id) {
 function applySvyazkaDraft() {
   if (!svyazkaDraft.nazvanie.trim()) { showError('Укажите название связки.'); return; }
   if (svyazkaDraft.pod_source_ids.length === 0) { showError('Выберите хотя бы один под-источник.'); return; }
-  if (!svyazkaDraft.project_id) { showError('Укажите проект Скорозвона.'); return; }
+  if (!svyazkaDraft.project_id) { showError('Укажите проект ' + svyazkaProviderLabel(svyazkaDraft) + '.'); return; }
 
   const isNew = svyazkaModalId === null;
   const podNames = svyazkaDraft.pod_source_ids.map(sourceName).join(', ');
   const regionNames = (svyazkaDraft.region_ids || []).map(regionName).join(', ');
   const msg = isNew
-    ? `Создать связку «${svyazkaDraft.nazvanie}» (${podNames} \u2192 ${svyazkaDraft.project_id}, регионы: ${regionNames || 'все'})?`
+    ? `Создать связку «${svyazkaDraft.nazvanie}» (${svyazkaProviderLabel(svyazkaDraft)}: ${podNames} \u2192 ${svyazkaDraft.project_id}, регионы: ${regionNames || 'все'})?`
     : `Применить изменения связки «${svyazkaDraft.nazvanie}»?\n\nНовые условия начнут действовать в проде сразу после подтверждения.`;
 
   customConfirm(msg, async (ok) => {
     if (!ok) return;
     try {
+      const path = svyazkaApiPath(svyazkaDraft);
       if (isNew) {
-        await apiJSON('/rest/skorozvon/links', {
+        await apiJSON(path, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(svyazkaPayload(svyazkaDraft)),
         });
       } else {
-        await apiJSON('/rest/skorozvon/links/' + svyazkaModalId, {
+        await apiJSON(path + '/' + svyazkaModalId, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(svyazkaPayload(svyazkaDraft)),
@@ -2330,4 +3367,32 @@ function addMediaplan() { DATA.mediaplans.push({ id:nextId.mediaplans++, upk:UPK
 function addRegion() { DATA.regionDict.push({ id:nextId.regionDict++, canonical:'Новый регион', raw:[] }); renderPanels(); }
 
 /* ===== ИНИЦИАЛИЗАЦИЯ ===== */
-showTab(activeTab);
+(function initSettingsRouter() {
+  document.getElementById('section-switch').addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-section]');
+    if (!a) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    switchSection(a.dataset.section);
+  });
+  document.getElementById('tabs').addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-tab]');
+    if (!a) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    switchTab(a.dataset.tab);
+  });
+  window.addEventListener('popstate', () => {
+    const route = resolveRoute(location.pathname);
+    syncingUrl = true;
+    showTab(route.tabId, { replaceUrl: false }).finally(() => { syncingUrl = false; });
+  });
+
+  const route = resolveRoute(location.pathname);
+  activeSection = route.sectionId;
+  activeTab = route.tabId;
+  if (location.pathname.replace(/\/+$/, '') !== route.canonical.replace(/\/+$/, '')) {
+    history.replaceState({ tabId: route.tabId }, '', route.canonical);
+  }
+  showTab(route.tabId, { replaceUrl: true });
+})();

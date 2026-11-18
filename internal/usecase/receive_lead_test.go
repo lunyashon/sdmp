@@ -138,6 +138,14 @@ func (s *stubLeadRepo) List(context.Context, port.LeadListFilter) ([]entity.Lead
 	return nil, 0, nil
 }
 
+func (s *stubLeadRepo) ListSkDispatch(context.Context, []int64) ([]entity.LeadSkDispatch, error) {
+	return nil, nil
+}
+
+func (s *stubLeadRepo) ListSkResend(context.Context, []int64) ([]entity.LeadSkResend, error) {
+	return nil, nil
+}
+
 func (s *stubLeadRepo) CountBySource(context.Context, time.Time, time.Time) ([]entity.LeadSourceCount, error) {
 	return nil, nil
 }
@@ -154,6 +162,10 @@ func (s *stubLeadRepo) CountSkorozvonBitrixBySource(context.Context, time.Time, 
 	return nil, nil
 }
 
+func (s *stubLeadRepo) CountOutgoingDispatch(context.Context, time.Time, time.Time) (entity.LeadOutgoingStats, error) {
+	return entity.LeadOutgoingStats{}, nil
+}
+
 func (s *stubLeadRepo) Get(context.Context, int64) (entity.LeadDetail, error) {
 	return entity.LeadDetail{}, nil
 }
@@ -161,12 +173,19 @@ func (s *stubLeadRepo) Get(context.Context, int64) (entity.LeadDetail, error) {
 func (s *stubLeadRepo) GetByUUID(context.Context, string) (entity.LeadDetail, error) {
 	return entity.LeadDetail{}, nil
 }
+func (s *stubLeadRepo) GetForSkorozvon(context.Context, string) (entity.LeadForSkorozvon, error) {
+	return entity.LeadForSkorozvon{}, nil
+}
 
 func (s *stubLeadRepo) UpdateEnrichment(context.Context, int64, entity.LeadEnrichment) error {
 	return nil
 }
 
 func (s *stubLeadRepo) InsertDispatch(context.Context, entity.Dispatch) error {
+	return nil
+}
+
+func (s *stubLeadRepo) SaveZaryaOldResult(context.Context, int64, bool) error {
 	return nil
 }
 
@@ -179,6 +198,22 @@ func (s *stubLeadRepo) BindSkorozvon(context.Context, int64, string, string) err
 }
 
 func (s *stubLeadRepo) BindBitrix(context.Context, string, string) error {
+	return nil
+}
+
+func (s *stubLeadRepo) HasSkorozvonSent(context.Context, int64, string) (bool, error) {
+	return false, nil
+}
+
+func (s *stubLeadRepo) BindCrmcalls(context.Context, int64, string, string) error {
+	return nil
+}
+
+func (s *stubLeadRepo) HasCrmcallsSent(context.Context, int64, string) (bool, error) {
+	return false, nil
+}
+
+func (s *stubLeadRepo) ApplyCrmcallsPostback(context.Context, entity.CrmcallsPostback) error {
 	return nil
 }
 
@@ -203,6 +238,10 @@ func (s *stubLeadRepo) ReplaceSkorozvonAnketaFields(context.Context, string, []e
 }
 
 func (s *stubLeadRepo) EnqueueBx24(context.Context, string) error {
+	return nil
+}
+
+func (s *stubLeadRepo) InsertImport(context.Context, entity.LeadImportRow) error {
 	return nil
 }
 
@@ -241,14 +280,15 @@ func TestReceiveLeadSuccess(t *testing.T) {
 	svc := newReceiveSvc(entity.Source{ID: 10, Token: "hook-token", BitrixCode: "UC_L26K09", IsActive: true}, leads, storage)
 
 	id, err := svc.Receive(context.Background(), ReceiveLeadInput{
-		UserID:     "1",
-		Token:      "hook-token",
-		Phone:      "79001234567",
-		SourceCode: "UC_L26K09",
-		WebID:      "ext-1",
+		UserID:            "1",
+		Token:             "hook-token",
+		Phone:             "+7 (900) 123-45-67",
+		SourceDescription: "Яндекс.Директ",
+		WebID:             "ext-1",
 		Payload: map[string]any{
 			"fields": map[string]any{
 				"PHONE":                "79001234567",
+				"SOURCE_DESCRIPTION":   "Яндекс.Директ",
 				"UF_CRM_1734523005552": "mts",
 				"UF_CRM_1766149282":    "БФЛ (подтв.)",
 			},
@@ -271,6 +311,9 @@ func TestReceiveLeadSuccess(t *testing.T) {
 	}
 	if leads.rows[0].WebID != "ext-1" {
 		t.Fatalf("web_id: %+v", leads.rows[0])
+	}
+	if leads.rows[0].SourceDescription != "Яндекс.Директ" {
+		t.Fatalf("source_description: %+v", leads.rows[0])
 	}
 	if len(leads.out) != 1 || leads.out[0].SourceID != 10 || leads.out[0].Payload == "" {
 		t.Fatalf("outbox: %+v", leads.out)
@@ -453,20 +496,26 @@ func TestRawObjectKey(t *testing.T) {
 	}
 }
 
-func TestReceiveLeadSourceIDMismatch(t *testing.T) {
+func TestReceiveLeadIgnoresPayloadSourceID(t *testing.T) {
+	leads := &stubLeadRepo{}
 	svc := newReceiveSvc(entity.Source{
 		ID:         10,
 		Token:      "hook-token",
 		BitrixCode: "UC_L26K09",
 		IsActive:   true,
-	}, &stubLeadRepo{}, &memS3{})
-	_, err := svc.Receive(context.Background(), ReceiveLeadInput{
-		UserID:     "1",
-		Token:      "hook-token",
-		Phone:      "79001234567",
-		SourceCode: "UC_OTHER",
+	}, leads, &memS3{})
+	id, err := svc.Receive(context.Background(), ReceiveLeadInput{
+		UserID: "1",
+		Token:  "hook-token",
+		Phone:  "79001234567",
+		Payload: map[string]any{
+			"fields": map[string]any{"SOURCE_ID": "WEB"},
+		},
 	})
-	if !errors.Is(err, domain.ErrInvalidInput) {
-		t.Fatalf("got %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 1 || leads.rows[0].SourceID != 10 {
+		t.Fatalf("id=%d lead=%+v", id, leads.rows)
 	}
 }

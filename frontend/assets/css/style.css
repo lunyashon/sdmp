@@ -109,6 +109,8 @@
   .tl-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
   .tl-badge.ok { background: #e6f1e6; color: #2f5233; }
   .tl-badge.fail { background: #fbeee6; color: #a23b2e; }
+  .tl-badge.wait { background: #f4efe3; color: #7a5b1e; }
+  .tl-item.tl-queue::before { background: #b0892e; }
   .raw-link { display:inline-block; margin-top:8px; font-size: 13px; color: var(--accent); cursor: pointer; text-decoration: underline; }
   .dispatch-row { display:flex; justify-content:space-between; align-items:center; gap:12px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
   .dispatch-row:last-child { border-bottom: none; }

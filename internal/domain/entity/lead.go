@@ -1,6 +1,9 @@
 package entity
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	StatusAccepted int16 = 1
@@ -20,6 +23,8 @@ const (
 	ChannelSkorozvon int16 = 1
 	ChannelPartner   int16 = 2
 	ChannelBitrix    int16 = 3
+	ChannelGoogle    int16 = 4
+	ChannelCrmcalls  int16 = 5
 
 	EventAccepted int16 = 1
 	EventEnriched int16 = 2
@@ -34,7 +39,19 @@ const (
 	EventSourceSK       int16 = 2
 	EventSourceAPI      int16 = 3
 	EventSourceExternal int16 = 4
+
+	// SkorozvonFIOFieldID — custom field «ФИО» в СК. Имя с карточки (lead.name) вяжем сюда.
+	SkorozvonFIOFieldID int64 = 50000007333
 )
+
+func UsableSkorozvonName(name string) string {
+	name = strings.TrimSpace(name)
+	switch strings.ToLower(name) {
+	case "", "фио не указано", "наименование не указано":
+		return ""
+	}
+	return name
+}
 
 type LeadEnrichment struct {
 	RegionID       *int
@@ -84,8 +101,9 @@ type SkorozvonCustomValue struct {
 }
 
 type SkorozvonAnketaField struct {
-	FieldID int64
-	EnumID  int64
+	FieldID   int64
+	EnumID    int64
+	ValueText string
 }
 
 type SkorozvonAnketaFieldItem struct {
@@ -136,12 +154,29 @@ type LeadListItem struct {
 	UPK               string
 	Phone             string
 	Zarya             string
+	ZaryaOld          string
 	Tag               string
 	WebID             string
 	ProjectNum        string
 	CallID            string
 	CallURL           string
 	ViaUs             bool
+	SkSentOK          *bool
+	SkHTTPStatus      *int
+	SkError           string
+}
+
+type LeadSkDispatch struct {
+	LeadRowID  int64
+	SentOK     bool
+	HTTPStatus *int
+	Error      string
+}
+
+type LeadSkResend struct {
+	ID        int64
+	UUID      string
+	ProjectID string
 }
 
 type LeadEvent struct {
@@ -150,6 +185,14 @@ type LeadEvent struct {
 	OccurredAt time.Time
 	Source     int16
 	Details    string
+}
+
+type LeadOutboxQueue struct {
+	UUID       string
+	ChannelID  int16
+	Channel    string
+	CountRetry int16
+	LastRetry  *time.Time
 }
 
 type LeadDispatch struct {
@@ -225,9 +268,11 @@ type LeadDetail struct {
 	CreatedAt         time.Time
 	UpdatedAt         *time.Time
 	Zarya             string
+	ZaryaOld          string
 	UPK               string
 	Events            []LeadEvent
 	Dispatches        []LeadDispatch
+	Queues            []LeadOutboxQueue
 	PhoneHistory      []LeadPhoneHistory
 	Anketa            *SkorozvonAnketa
 	AnketaFields      []SkorozvonAnketaFieldItem
@@ -266,15 +311,53 @@ type LeadSkorozvonBitrixStat struct {
 	CreatedSent int `json:"created_sent"`
 }
 
+type LeadPartnerDispatchCount struct {
+	PartnerID int `json:"partner_id"`
+	Count     int `json:"count"`
+}
+
+type LeadSkorozvonDispatchCount struct {
+	ProjectID string `json:"project_id"`
+	Count     int    `json:"count"`
+}
+
+type LeadOutgoingStats struct {
+	Partners  []LeadPartnerDispatchCount   `json:"partners"`
+	Skorozvon []LeadSkorozvonDispatchCount `json:"skorozvon"`
+	Crmcalls  []LeadSkorozvonDispatchCount `json:"crmcalls"`
+}
+
+type LeadForSkorozvon struct {
+	ID                int64
+	UUID              string
+	Phone             string
+	ChildSourceID     *int
+	Region            string
+	RegionID          *int
+	Zarya             string
+	ColdLabel         string
+	SourceDescription string
+}
+
 type LeadRow struct {
-	ID        int64
-	UUID      string
-	Phone     string
-	SourceID  int
-	WebID     string
-	StatusID  int16
-	S3Key     string
-	CreatedAt time.Time
+	ID                int64
+	UUID              string
+	Phone             string
+	SourceID          int
+	WebID             string
+	SourceDescription string
+	StatusID          int16
+	S3Key             string
+	CreatedAt         time.Time
+}
+
+type LeadImportRow struct {
+	UUID       string
+	Phone      string
+	PhoneValid bool
+	SourceID   int
+	Payload    string
+	Values     map[string]any
 }
 
 type OutboxMessage struct {
@@ -290,4 +373,33 @@ type OutboxBx24 struct {
 	UUID        string
 	LeadUUID    string
 	LockedUntil *time.Time
+	CountRetry  int16
+	LastRetry   *time.Time
+}
+
+type OutboxSkorozvon struct {
+	UUID        string
+	LeadUUID    string
+	ProjectID   *int64
+	LockedUntil *time.Time
+	CountRetry  int16
+	LastRetry   *time.Time
+}
+
+type OutboxCrmcalls struct {
+	UUID        string
+	LeadUUID    string
+	LockedUntil *time.Time
+	CountRetry  int16
+	LastRetry   *time.Time
+}
+
+type CrmcallsPostback struct {
+	ID         string
+	Name       string
+	Phone      string
+	Result     string
+	CallID     string
+	CallURL    string
+	CallLastAt *time.Time
 }

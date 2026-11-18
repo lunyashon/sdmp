@@ -46,6 +46,31 @@ const docTemplate = `{
                 }
             }
         },
+        "/rest/docs/crm.lead.add.docx": {
+            "get": {
+                "produces": [
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                ],
+                "tags": [
+                    "docs"
+                ],
+                "summary": "Документация crm.lead.add",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
+                        }
+                    }
+                }
+            }
+        },
         "/rest/leads": {
             "get": {
                 "produces": [
@@ -168,6 +193,16 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "false=создалась из СК, true=обновилась",
                         "name": "via_us",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        },
+                        "collectionFormat": "multi",
+                        "description": "lead_row.id",
+                        "name": "ids",
                         "in": "query"
                     },
                     {
@@ -483,6 +518,65 @@ const docTemplate = `{
                                     "properties": {
                                         "data": {
                                             "$ref": "#/definitions/dto.LeadSourceCountList"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/leads/outgoing-stats": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "leads"
+                ],
+                "summary": "Исходящий трафик из dispatch",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Дата с",
+                        "name": "date_from",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Дата по",
+                        "name": "date_to",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/entity.LeadOutgoingStats"
                                         }
                                     }
                                 }
@@ -1548,6 +1642,44 @@ const docTemplate = `{
             }
         },
         "/rest/skorozvon/links/{id}": {
+            "delete": {
+                "tags": [
+                    "skorozvon"
+                ],
+                "summary": "Удалить связку Скорозвона",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "ID связки",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
+                        }
+                    }
+                }
+            },
             "put": {
                 "consumes": [
                     "application/json"
@@ -1617,7 +1749,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/rest/skorozvon/projects": {
+        "/rest/skorozvon/projects/list": {
             "get": {
                 "produces": [
                     "application/json"
@@ -1626,6 +1758,21 @@ const docTemplate = `{
                     "skorozvon"
                 ],
                 "summary": "Проекты Скорозвона",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Смещение",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Поиск по названию",
+                        "name": "name",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1639,55 +1786,6 @@ const docTemplate = `{
                                     "properties": {
                                         "data": {
                                             "$ref": "#/definitions/dto.SkorozvonProjectList"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/response.ErrorEnvelope"
-                        }
-                    }
-                }
-            },
-            "post": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "skorozvon"
-                ],
-                "summary": "Добавить проект Скорозвона",
-                "parameters": [
-                    {
-                        "description": "Проект",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/dto.SkorozvonProjectRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/response.SuccessEnvelope"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "data": {
-                                            "$ref": "#/definitions/entity.SkorozvonProject"
                                         }
                                     }
                                 }
@@ -1711,6 +1809,9 @@ const docTemplate = `{
         },
         "/rest/skorozvon/projects/refresh": {
             "post": {
+                "consumes": [
+                    "application/json"
+                ],
                 "produces": [
                     "application/json"
                 ],
@@ -1718,6 +1819,59 @@ const docTemplate = `{
                     "skorozvon"
                 ],
                 "summary": "Обновить проекты из Скорозвона",
+                "parameters": [
+                    {
+                        "description": "UUID проектов; пусто — все",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/dto.SkorozvonProjectRefreshRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.SkorozvonProjectList"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/rest/skorozvon/projects/sync": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "skorozvon"
+                ],
+                "summary": "Синхронизировать проекты Скорозвона",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1830,6 +1984,61 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sources"
+                ],
+                "summary": "Создать родительский источник",
+                "parameters": [
+                    {
+                        "description": "Источник",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/dto.CreateSourceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/response.SuccessEnvelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dto.SourceDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorEnvelope"
                         }
                     },
                     "500": {
@@ -2389,6 +2598,24 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "dto.CreateSourceRequest": {
+            "type": "object",
+            "properties": {
+                "base_label": {
+                    "type": "string"
+                },
+                "bitrix_code": {
+                    "type": "string"
+                },
+                "cold_label": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "Новый источник"
                 }
             }
         },
@@ -3048,17 +3275,26 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/entity.SkorozvonProject"
                     }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },
-        "dto.SkorozvonProjectRequest": {
+        "dto.SkorozvonProjectRefreshRequest": {
             "type": "object",
             "properties": {
-                "name": {
-                    "type": "string"
-                },
-                "project_id": {
-                    "type": "integer"
+                "uuids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -3158,6 +3394,34 @@ const docTemplate = `{
                 }
             }
         },
+        "entity.LeadOutgoingStats": {
+            "type": "object",
+            "properties": {
+                "partners": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/entity.LeadPartnerDispatchCount"
+                    }
+                },
+                "skorozvon": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/entity.LeadSkorozvonDispatchCount"
+                    }
+                }
+            }
+        },
+        "entity.LeadPartnerDispatchCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "partner_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "entity.LeadSkorozvonBitrixStat": {
             "type": "object",
             "properties": {
@@ -3175,6 +3439,17 @@ const docTemplate = `{
                 },
                 "updated_sent": {
                     "type": "integer"
+                }
+            }
+        },
+        "entity.LeadSkorozvonDispatchCount": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
                 }
             }
         },

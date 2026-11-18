@@ -15,6 +15,7 @@ import (
 
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/lib/curl"
+	"github.com/lunyashon/sdmp/internal/lib/ratelimit"
 	"github.com/lunyashon/sdmp/internal/port"
 )
 
@@ -41,6 +42,7 @@ type Config struct {
 	APIKey  string
 	AppID   string
 	AppKey  string
+	RPS     int
 }
 
 type Client struct {
@@ -48,6 +50,7 @@ type Client struct {
 	http  *http.Client
 	cfg   Config
 	cache port.Redis
+	pace  *ratelimit.Pace
 	mu    sync.Mutex
 }
 
@@ -66,7 +69,8 @@ func New(cfg Config, cache port.Redis, log *slog.Logger) *Client {
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		cfg: cfg,
+		cfg:  cfg,
+		pace: ratelimit.NewPace(cfg.RPS),
 	}
 }
 
@@ -93,6 +97,10 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any) ([]b
 	}
 	if body != nil {
 		headers["Content-Type"] = "application/json"
+	}
+
+	if err := c.pace.Wait(ctx); err != nil {
+		return nil, 0, err
 	}
 
 	raw, code, err := curl.CurlWithContext(ctx, c.http, c.cfg.BaseURL+path, method, reader, headers)
@@ -188,6 +196,9 @@ func (c *Client) SendLead(ctx context.Context, req port.SkorozvonLead) (port.Sko
 	}
 	if req.ExternalID != "" {
 		body["external_id"] = req.ExternalID
+	}
+	if len(req.CustomFields) > 0 {
+		body["custom_fields"] = req.CustomFields
 	}
 
 	raw, code, err := c.doJSON(ctx, http.MethodPost, "/api/v2/leads", body)

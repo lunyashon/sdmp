@@ -24,6 +24,10 @@ type Handlers struct {
 	SkorozvonLinks    *handler.SkorozvonLinksHandler
 	SkorozvonEvents   *handler.SkorozvonEventsHandler
 	CRMLead           *handler.CRMLeadHandler
+	Docs              *handler.DocsHandler
+	BitrixMaps        *handler.BitrixMapsHandler
+	GoogleSheets      *handler.GoogleSheetsHandler
+	Crmcalls          *handler.CrmcallsHandler
 }
 
 func NewRouter(h Handlers, config *config.Config) *gongin.Engine {
@@ -35,17 +39,32 @@ func NewRouter(h Handlers, config *config.Config) *gongin.Engine {
 	mountSwagger(router, config)
 
 	rest := router.Group("/rest")
+	if config != nil && strings.TrimSpace(config.AuthPassword) != "" {
+		rest.POST("/auth/login", handler.NewAuthHandler(config).Login)
+		rest.Use(requireAuth(config))
+	}
 	{
 		rest.GET("/leads", h.Leads.List)
 		rest.GET("/leads/export.xlsx", h.Leads.ExportXLSX)
+		rest.POST("/leads/import/preview", h.Leads.PreviewImport)
+		rest.POST("/leads/import", h.Leads.Import)
+		rest.POST("/leads/skorozvon/resend", h.Leads.ResendSkorozvon)
 		rest.GET("/leads/incoming-stats", h.Leads.IncomingStats)
 		rest.GET("/leads/enrichment-stats", h.Leads.EnrichmentStats)
 		rest.GET("/leads/zarya-stats", h.Leads.ZaryaStats)
 		rest.GET("/leads/skorozvon-bitrix-stats", h.Leads.SkorozvonBitrixStats)
+		rest.GET("/leads/outgoing-stats", h.Leads.OutgoingStats)
+		rest.GET("/leads/sk-dispatch", h.Leads.ListSkDispatch)
 		rest.GET("/leads/:id", h.Leads.Get)
 		rest.GET("/leads/:id/raw", h.Leads.Raw)
+		rest.GET("/leads/:id/recording", h.Leads.Recording)
+		rest.GET("/recordings/:ref", h.Leads.PublicRecording)
 		rest.POST("/leads/:id/partners/:partnerId/resend", h.Leads.ResendPartner)
+		if h.Docs != nil {
+			rest.GET("/docs/crm.lead.add.docx", h.Docs.CRMLeadAddDocx)
+		}
 		rest.GET("/sources", h.Sources.List)
+		rest.POST("/sources", h.Sources.Create)
 		if h.Dicts != nil {
 			rest.GET("/regions", h.Dicts.Regions)
 			rest.GET("/statuses", h.Dicts.Statuses)
@@ -66,8 +85,8 @@ func NewRouter(h Handlers, config *config.Config) *gongin.Engine {
 			rest.PUT("/sources/:id/split", h.Splits.Replace)
 		}
 		if h.SkorozvonProjects != nil {
-			rest.GET("/skorozvon/projects", h.SkorozvonProjects.List)
-			rest.POST("/skorozvon/projects", h.SkorozvonProjects.Create)
+			rest.GET("/skorozvon/projects/list", h.SkorozvonProjects.List)
+			rest.POST("/skorozvon/projects/sync", h.SkorozvonProjects.Sync)
 			rest.POST("/skorozvon/projects/refresh", h.SkorozvonProjects.Refresh)
 			rest.POST("/skorozvon/projects/:uuid/test", h.SkorozvonProjects.SendTest)
 		}
@@ -75,6 +94,7 @@ func NewRouter(h Handlers, config *config.Config) *gongin.Engine {
 			rest.GET("/skorozvon/links", h.SkorozvonLinks.List)
 			rest.POST("/skorozvon/links", h.SkorozvonLinks.Create)
 			rest.PUT("/skorozvon/links/:id", h.SkorozvonLinks.Update)
+			rest.DELETE("/skorozvon/links/:id", h.SkorozvonLinks.Delete)
 		}
 		if h.SkorozvonEvents != nil {
 			rest.GET("/skorozvon/events", h.SkorozvonEvents.Receive)
@@ -88,11 +108,48 @@ func NewRouter(h Handlers, config *config.Config) *gongin.Engine {
 		rest.POST("/sources/:id/token", h.Sources.CreateToken)
 		rest.DELETE("/sources/:id/token", h.Sources.DeleteToken)
 		rest.GET("/sources/by-token/:token", h.Sources.ListByToken)
+		if h.BitrixMaps != nil {
+			rest.GET("/bitrix/lead-map", h.BitrixMaps.Get)
+			rest.PUT("/bitrix/lead-map", h.BitrixMaps.Save)
+			rest.POST("/bitrix/lead-map/refresh", h.BitrixMaps.Refresh)
+		}
+		if h.GoogleSheets != nil {
+			rest.GET("/google/sheets", h.GoogleSheets.List)
+			rest.POST("/google/sheets", h.GoogleSheets.Create)
+			rest.PUT("/google/sheets/:id", h.GoogleSheets.Update)
+			rest.DELETE("/google/sheets/:id", h.GoogleSheets.Delete)
+		}
+		if h.Crmcalls != nil {
+			rest.GET("/crmcalls/links", h.Crmcalls.ListLinks)
+			rest.POST("/crmcalls/links", h.Crmcalls.CreateLink)
+			rest.PUT("/crmcalls/links/:id", h.Crmcalls.UpdateLink)
+			rest.DELETE("/crmcalls/links/:id", h.Crmcalls.DeleteLink)
+			rest.GET("/crmcalls/projects", h.Crmcalls.ListProjects)
+			rest.POST("/crmcalls/projects/sync", h.Crmcalls.SyncProjects)
+			rest.POST("/crmcalls/projects/refresh", h.Crmcalls.RefreshProjects)
+			rest.POST("/crmcalls/projects/:id/test", h.Crmcalls.SendTest)
+			rest.GET("/crmcalls/settings", h.Crmcalls.GetSettings)
+			rest.PUT("/crmcalls/settings", h.Crmcalls.SaveSettings)
+			rest.GET("/crmcalls/events", h.Crmcalls.Receive)
+			rest.POST("/crmcalls/events", h.Crmcalls.Receive)
+			rest.PUT("/crmcalls/events", h.Crmcalls.Receive)
+			rest.PATCH("/crmcalls/events", h.Crmcalls.Receive)
+		}
 		if h.CRMLead != nil {
-			rest.POST("/:user_id/:token/crm.lead.add.json", h.CRMLead.Add)
-			rest.GET("/:user_id/:token/crm.lead.add.json", h.CRMLead.Add)
-			rest.POST("/:user_id/:token/crm.lead.add", h.CRMLead.Add)
-			rest.GET("/:user_id/:token/crm.lead.add", h.CRMLead.Add)
+			add := []gongin.HandlerFunc{h.CRMLead.Add}
+			if limit := crmLeadAddLimit(config); limit != nil {
+				add = []gongin.HandlerFunc{limit, h.CRMLead.Add}
+			}
+			rest.POST("/:user_id/:token/crm.lead.add.json", add...)
+			rest.GET("/:user_id/:token/crm.lead.add.json", add...)
+			rest.POST("/:user_id/:token/crm.lead.add", add...)
+			rest.GET("/:user_id/:token/crm.lead.add", add...)
+			rest.GET("/:user_id/:token/scope.json", h.CRMLead.Scope)
+			rest.POST("/:user_id/:token/scope.json", h.CRMLead.Scope)
+			rest.GET("/:user_id/:token/scope", h.CRMLead.Scope)
+			rest.POST("/:user_id/:token/scope", h.CRMLead.Scope)
+			rest.GET("/:user_id/:token/:method", h.CRMLead.Mimic)
+			rest.POST("/:user_id/:token/:method", h.CRMLead.Mimic)
 		}
 	}
 

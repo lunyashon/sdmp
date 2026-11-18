@@ -15,7 +15,6 @@ ENV TZ=Europe/Moscow
 WORKDIR /app
 
 COPY --from=builder /out/sdmp-api /app/sdmp-api
-COPY config/.env /app/config/.env
 
 EXPOSE 8080
 ENTRYPOINT ["/app/sdmp-api"]

@@ -90,7 +90,7 @@ func TestAddOperatorAlias(t *testing.T) {
 func TestStatusesReturnsIDAndName(t *testing.T) {
 	api := &stubDictAPI{statuses: []entity.NamedRef{
 		{ID: 1, Name: "принята"},
-		{ID: 4, Name: "из СК"},
+		{ID: 4, Name: "из звонилки"},
 	}}
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/rest/statuses", nil)
@@ -102,7 +102,7 @@ func TestStatusesReturnsIDAndName(t *testing.T) {
 		Count int               `json:"count"`
 		Items []entity.NamedRef `json:"items"`
 	}](t, w.Body.Bytes())
-	if got.Count != 2 || got.Items[0].ID != 1 || got.Items[0].Name != "принята" || got.Items[1].Name != "из СК" {
+	if got.Count != 2 || got.Items[0].ID != 1 || got.Items[0].Name != "принята" || got.Items[1].Name != "из звонилки" {
 		t.Fatalf("%+v", got)
 	}
 }

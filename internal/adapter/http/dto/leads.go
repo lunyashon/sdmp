@@ -46,6 +46,13 @@ type CreateChildSourceRequest struct {
 	BaseLabel  string `json:"base_label"`
 }
 
+type CreateSourceRequest struct {
+	Name       string `json:"name" example:"Новый источник"`
+	BitrixCode string `json:"bitrix_code"`
+	ColdLabel  string `json:"cold_label"`
+	BaseLabel  string `json:"base_label"`
+}
+
 func NewSourceDTO(s entity.Source) SourceDTO {
 	return SourceDTO{
 		ID:                s.ID,
@@ -79,12 +86,16 @@ type LeadDTO struct {
 	UPK               string `json:"upk"`
 	Phone             string `json:"phone"`
 	Zarya             string `json:"zarya"`
+	ZaryaOld          string `json:"zarya_old"`
 	Tag               string `json:"tag"`
 	WebID             string `json:"web_id"`
 	ProjectNum        string `json:"project_num"`
 	CallID            string `json:"call_id"`
 	CallURL           string `json:"call_url"`
 	ViaUs             bool   `json:"via_us"`
+	SkSentOK          *bool  `json:"sk_sent_ok"`
+	SkHTTPStatus      *int   `json:"sk_http_status"`
+	SkError           string `json:"sk_error,omitempty"`
 }
 
 type LeadsQuery struct {
@@ -102,6 +113,7 @@ type LeadsQuery struct {
 	Tag          string
 	CallResult   *int64
 	ViaUs        *bool
+	SkSend       []string
 	IDs          []int64
 	Columns      []string
 	Limit        int
@@ -114,6 +126,32 @@ type LeadsResponse struct {
 	Limit  int       `json:"limit"`
 	Offset int       `json:"offset"`
 	Leads  []LeadDTO `json:"leads"`
+}
+
+type LeadSkDispatchDTO struct {
+	ID         int64  `json:"id"`
+	SentOK     bool   `json:"sent_ok"`
+	HTTPStatus *int   `json:"http_status,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+func NewLeadSkDispatchDTO(d entity.LeadSkDispatch) LeadSkDispatchDTO {
+	return LeadSkDispatchDTO{
+		ID:         d.LeadRowID,
+		SentOK:     d.SentOK,
+		HTTPStatus: d.HTTPStatus,
+		Error:      d.Error,
+	}
+}
+
+type LeadImportRequest struct {
+	SourceID int               `json:"source_id"`
+	Mapping  map[string]string `json:"mapping"`
+	Rows     [][]string        `json:"rows"`
+}
+
+type SkorozvonResendRequest struct {
+	IDs []int64 `json:"ids"`
 }
 
 func NewLeadDTO(l entity.LeadListItem) LeadDTO {
@@ -136,12 +174,16 @@ func NewLeadDTO(l entity.LeadListItem) LeadDTO {
 		UPK:               l.UPK,
 		Phone:             l.Phone,
 		Zarya:             l.Zarya,
+		ZaryaOld:          l.ZaryaOld,
 		Tag:               l.Tag,
 		WebID:             l.WebID,
 		ProjectNum:        l.ProjectNum,
 		CallID:            l.CallID,
 		CallURL:           l.CallURL,
 		ViaUs:             l.ViaUs,
+		SkSentOK:          l.SkSentOK,
+		SkHTTPStatus:      l.SkHTTPStatus,
+		SkError:           l.SkError,
 	}
 }
 
@@ -156,6 +198,7 @@ func ParseLeadsQuery(q url.Values) (LeadsQuery, error) {
 		Operators:    queryInts(q, "operator"),
 		Statuses:     queryInts(q, "status"),
 		Zarya:        queryStrings(q, "zarya"),
+		SkSend:       normalizeSkSend(queryStrings(q, "sk_send")),
 		Phone:        strings.TrimSpace(q.Get("phone")),
 		City:         strings.TrimSpace(q.Get("city")),
 		Tag:          strings.TrimSpace(q.Get("tag")),
@@ -194,6 +237,35 @@ func ParseLeadsQuery(q url.Values) (LeadsQuery, error) {
 		return LeadsQuery{}, fmt.Errorf("date_from and date_to are required")
 	}
 	return out, nil
+}
+
+func ParseLeadIDsQuery(q url.Values) []int64 {
+	return queryInt64s(q, "ids")
+}
+
+func normalizeSkSend(in []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		key := ""
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "ok", "success":
+			key = "ok"
+		case "error", "fail", "err":
+			key = "error"
+		case "none", "missing", "no":
+			key = "none"
+		}
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out
 }
 
 func queryStrings(q url.Values, key string) []string {
@@ -298,6 +370,15 @@ type LeadDispatchDTO struct {
 	RawResponse string `json:"raw_response,omitempty"`
 }
 
+type LeadOutboxQueueDTO struct {
+	UUID       string `json:"uuid"`
+	ChannelID  int16  `json:"channel_id"`
+	Channel    string `json:"channel"`
+	Status     string `json:"status"`
+	CountRetry int16  `json:"count_retry"`
+	LastRetry  string `json:"last_retry,omitempty"`
+}
+
 type LeadPhoneHistoryDTO struct {
 	ID         int64  `json:"id"`
 	UUID       string `json:"uuid"`
@@ -345,9 +426,11 @@ type LeadDetailDTO struct {
 	CreatedAt             string                    `json:"created_at"`
 	UpdatedAt             string                    `json:"updated_at,omitempty"`
 	Zarya                 string                    `json:"zarya"`
+	ZaryaOld              string                    `json:"zarya_old"`
 	UPK                   string                    `json:"upk"`
 	Events                []LeadEventDTO            `json:"events"`
 	Dispatches            []LeadDispatchDTO         `json:"dispatches"`
+	Queues                []LeadOutboxQueueDTO      `json:"queues"`
 	PhoneHistory          []LeadPhoneHistoryDTO     `json:"phone_history"`
 	SkorozvonAnketa       *SkorozvonAnketaDTO       `json:"skorozvon_anketa"`
 	SkorozvonAnketaFields []SkorozvonAnketaFieldDTO `json:"skorozvon_anketa_fields"`
@@ -408,6 +491,17 @@ func NewLeadDetailDTO(l entity.LeadDetail) LeadDetailDTO {
 			RawResponse: d.RawResponse,
 		})
 	}
+	queues := make([]LeadOutboxQueueDTO, 0, len(l.Queues))
+	for _, q := range l.Queues {
+		queues = append(queues, LeadOutboxQueueDTO{
+			UUID:       q.UUID,
+			ChannelID:  q.ChannelID,
+			Channel:    q.Channel,
+			Status:     "в очереди на отправку",
+			CountRetry: q.CountRetry,
+			LastRetry:  formatLeadTimePtr(q.LastRetry),
+		})
+	}
 	history := make([]LeadPhoneHistoryDTO, 0, len(l.PhoneHistory))
 	for _, h := range l.PhoneHistory {
 		history = append(history, LeadPhoneHistoryDTO{
@@ -457,9 +551,11 @@ func NewLeadDetailDTO(l entity.LeadDetail) LeadDetailDTO {
 		CreatedAt:             formatLeadTime(l.CreatedAt),
 		UpdatedAt:             formatLeadTimePtr(l.UpdatedAt),
 		Zarya:                 l.Zarya,
+		ZaryaOld:              l.ZaryaOld,
 		UPK:                   l.UPK,
 		Events:                events,
 		Dispatches:            dispatches,
+		Queues:                queues,
 		PhoneHistory:          history,
 		SkorozvonAnketa:       newSkorozvonAnketaDTO(l.Anketa),
 		SkorozvonAnketaFields: newSkorozvonAnketaFieldsDTO(l.AnketaFields),

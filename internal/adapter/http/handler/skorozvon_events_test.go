@@ -132,8 +132,49 @@ func TestReceiveCallResultAppliesFields(t *testing.T) {
 	if gotFields[50000009406] != "[50000015671]" || gotFields[50000011777] != "[50000004560]" {
 		t.Fatalf("custom_fields %+v", svc.gotSnap.CustomFields)
 	}
+	if gotFields[entity.SkorozvonFIOFieldID] != `"Иван"` {
+		t.Fatalf("fio field %+v", svc.gotSnap.CustomFields)
+	}
 	if !strings.Contains(svc.gotSnap.LegacyRaw, `"name":"Иван"`) {
 		t.Fatalf("legacy %s", svc.gotSnap.LegacyRaw)
+	}
+}
+
+func TestReceiveCallResultSkipsPlaceholderName(t *testing.T) {
+	svc := &stubCallResultAPI{}
+	body := `{"type":"call_result","lead":{"id":1,"name":"ФИО не указано","phones":"+79001234567"},"call":{"id":2},"call_result":{"result_name":"Результат"}}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/skorozvon/events", strings.NewReader(body))
+	skorozvonEventsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	for _, f := range svc.gotSnap.CustomFields {
+		if f.FieldID == entity.SkorozvonFIOFieldID {
+			t.Fatalf("placeholder bound %+v", f)
+		}
+	}
+}
+
+func TestReceiveCallResultKeepsExistingFIOField(t *testing.T) {
+	svc := &stubCallResultAPI{}
+	body := `{"type":"call_result","lead":{"id":1,"name":"Алексей","phones":"+79001234567","custom_fields":{"FIELD_50000007333":"Пётр"}},"call":{"id":2},"call_result":{"result_name":"Результат"}}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rest/skorozvon/events", strings.NewReader(body))
+	skorozvonEventsRouter(svc).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	got := ""
+	n := 0
+	for _, f := range svc.gotSnap.CustomFields {
+		if f.FieldID == entity.SkorozvonFIOFieldID {
+			n++
+			got = string(f.Raw)
+		}
+	}
+	if n != 1 || got != `"Пётр"` {
+		t.Fatalf("n=%d got %q fields %+v", n, got, svc.gotSnap.CustomFields)
 	}
 }
 
