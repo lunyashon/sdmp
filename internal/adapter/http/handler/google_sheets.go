@@ -17,9 +17,13 @@ import (
 
 type GoogleSheetAPI interface {
 	List(ctx context.Context) ([]entity.GoogleSheet, error)
+	Accounts(ctx context.Context) ([]entity.GoogleAccount, error)
 	Create(ctx context.Context, in usecase.GoogleSheetInput) (entity.GoogleSheet, error)
 	Update(ctx context.Context, id int, in usecase.GoogleSheetInput) (entity.GoogleSheet, error)
 	Delete(ctx context.Context, id int) error
+	SendTest(ctx context.Context, id int) (entity.GoogleSheetCheck, error)
+	Refresh(ctx context.Context) ([]entity.GoogleSheetCheck, error)
+	Preview(ctx context.Context, in usecase.GoogleSheetInput) (entity.GoogleSheetPreview, error)
 }
 
 type GoogleSheetsHandler struct {
@@ -43,6 +47,22 @@ func NewGoogleSheetsHandler(svc GoogleSheetAPI, log *slog.Logger) *GoogleSheetsH
 // @Router       /rest/google/sheets [get]
 func (h *GoogleSheetsHandler) List(c *gin.Context) {
 	items, err := h.svc.List(c.Request.Context())
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	response.List(c, items)
+}
+
+// Accounts
+// @Summary      Сохранённые сервисные аккаунты Google
+// @Tags         google
+// @Produce      json
+// @Success      200 {object} response.SuccessEnvelope{data=dto.GoogleAccountList}
+// @Failure      500 {object} response.ErrorEnvelope
+// @Router       /rest/google/accounts [get]
+func (h *GoogleSheetsHandler) Accounts(c *gin.Context) {
+	items, err := h.svc.Accounts(c.Request.Context())
 	if err != nil {
 		response.HandleError(c, h.log, err)
 		return
@@ -112,6 +132,42 @@ func (h *GoogleSheetsHandler) Update(c *gin.Context) {
 // @Failure      404 {object} response.ErrorEnvelope
 // @Failure      500 {object} response.ErrorEnvelope
 // @Router       /rest/google/sheets/{id} [delete]
+func (h *GoogleSheetsHandler) Preview(c *gin.Context) {
+	in, ok := bindGoogleSheet(c)
+	if !ok {
+		return
+	}
+	item, err := h.svc.Preview(c.Request.Context(), in)
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	response.Success(c, item)
+}
+
+func (h *GoogleSheetsHandler) SendTest(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		response.Error(c, http.StatusBadRequest, "sheet id is required")
+		return
+	}
+	item, err := h.svc.SendTest(c.Request.Context(), id)
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	response.Success(c, item)
+}
+
+func (h *GoogleSheetsHandler) Refresh(c *gin.Context) {
+	items, err := h.svc.Refresh(c.Request.Context())
+	if err != nil {
+		response.HandleError(c, h.log, err)
+		return
+	}
+	response.List(c, items)
+}
+
 func (h *GoogleSheetsHandler) Delete(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -140,14 +196,16 @@ func bindGoogleSheet(c *gin.Context) (usecase.GoogleSheetInput, bool) {
 		isActive = *req.IsActive
 	}
 	return usecase.GoogleSheetInput{
-		Name:          req.Name,
-		SpreadsheetID: req.SpreadsheetID,
-		SheetName:     req.SheetName,
-		IsActive:      isActive,
-		TestMode:      testMode,
-		ZaryaResults:  req.ZaryaResults,
-		RegionIDs:     req.RegionIDs,
-		StopSourceIDs: req.StopSourceIDs,
-		Credentials:   json.RawMessage(req.Credentials),
+		Name:              req.Name,
+		SpreadsheetID:     req.SpreadsheetID,
+		SheetName:         req.SheetName,
+		IsActive:          isActive,
+		TestMode:          testMode,
+		ZaryaResults:      req.ZaryaResults,
+		RegionIDs:         req.RegionIDs,
+		StopSourceIDs:     req.StopSourceIDs,
+		Credentials:       json.RawMessage(req.Credentials),
+		CredentialsFromID: req.CredentialsFromID,
+		Columns:           req.Columns,
 	}, true
 }

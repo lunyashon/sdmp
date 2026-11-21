@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lunyashon/sdmp/internal/adapter/crmcalls"
+	"github.com/lunyashon/sdmp/internal/adapter/google"
 	httpgin "github.com/lunyashon/sdmp/internal/adapter/http/gin"
 	"github.com/lunyashon/sdmp/internal/adapter/http/handler"
 	"github.com/lunyashon/sdmp/internal/adapter/http/server"
@@ -121,7 +122,7 @@ func Run() error {
 	splitSvc := usecase.NewSplitService(splitRepo, sourceRepo, dictRepo)
 	skorozvonProjectSvc := usecase.NewSkorozvonProjectService(skorozvonProjectRepo, skorozvonClient)
 	skorozvonLinkSvc := usecase.NewSkorozvonLinkService(postgres.NewSkorozvonLinkRepo(pool))
-	googleSheetSvc := usecase.NewGoogleSheetService(postgres.NewGoogleSheetRepo(pool))
+	googleSheetSvc := usecase.NewGoogleSheetService(postgres.NewGoogleSheetRepo(pool)).WithAPI(google.New())
 	crmcallsProjectRepo := postgres.NewCrmcallsProjectRepo(pool)
 	crmcallsLinkSvc := usecase.NewCrmcallsLinkService(postgres.NewCrmcallsLinkRepo(pool), crmcallsProjectRepo)
 	crmcallsProjectSvc := usecase.NewCrmcallsProjectService(crmcallsProjectRepo, crmcallsClient).WithSettings(

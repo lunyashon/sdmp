@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/lunyashon/sdmp/internal/domain"
 	"github.com/lunyashon/sdmp/internal/domain/entity"
@@ -63,6 +65,16 @@ func (s *stubGoogleSheets) Delete(_ context.Context, id int) error {
 func (s *stubGoogleSheets) ListRoutable(context.Context, string, *int, int) ([]entity.GoogleSheetTarget, error) {
 	return nil, nil
 }
+func (s *stubGoogleSheets) UpdateCheck(context.Context, int, time.Time, bool, int, string) error {
+	return nil
+}
+func (s *stubGoogleSheets) Credentials(_ context.Context, id int) (json.RawMessage, error) {
+	raw, ok := s.creds[id]
+	if !ok || len(raw) == 0 {
+		return nil, domain.ErrNotFound
+	}
+	return raw, nil
+}
 
 func TestCreateGoogleSheetStoresPublicFields(t *testing.T) {
 	repo := &stubGoogleSheets{items: map[int]entity.GoogleSheet{}, creds: map[int]json.RawMessage{}}
@@ -95,6 +107,90 @@ func TestCreateGoogleSheetRejectsEmptyKey(t *testing.T) {
 		})
 	if !errors.Is(err, domain.ErrInvalidInput) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCreateGoogleSheetCopiesExistingAccount(t *testing.T) {
+	key := json.RawMessage(`{"client_email":"dev-service@example.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----"}`)
+	repo := &stubGoogleSheets{
+		items: map[int]entity.GoogleSheet{1: {ID: 1, Name: "Телефоны", ClientEmail: "dev-service@example.iam.gserviceaccount.com", HasKey: true}},
+		creds: map[int]json.RawMessage{1: key},
+		next:  1,
+	}
+	svc := NewGoogleSheetService(repo)
+	accounts, err := svc.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accounts) != 1 || accounts[0].ID != 1 || accounts[0].ClientEmail != "dev-service@example.iam.gserviceaccount.com" {
+		t.Fatalf("accounts %+v", accounts)
+	}
+	item, err := svc.Create(context.Background(), GoogleSheetInput{
+		Name:              "Вторая",
+		SpreadsheetID:     "abc",
+		SheetName:         "Лист",
+		CredentialsFromID: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(repo.creds[item.ID]) != string(key) {
+		t.Fatalf("copied %s", repo.creds[item.ID])
+	}
+}
+
+type stubSheetsAPI struct {
+	status int
+}
+
+func (s stubSheetsAPI) HeaderRow(context.Context, json.RawMessage, string, string) (string, []string, []string, error) {
+	return "Лиды", []string{"Телефон", "Город"}, []string{"Лиды"}, nil
+}
+
+func (s stubSheetsAPI) AppendRow(context.Context, json.RawMessage, string, string, []string) (int, []byte, error) {
+	return s.status, []byte("appended"), nil
+}
+
+func TestSendGoogleSheetTest(t *testing.T) {
+	repo := &stubGoogleSheets{
+		items: map[int]entity.GoogleSheet{1: {ID: 1, Name: "Телефоны", SpreadsheetID: "abc", SheetName: "Лист"}},
+		creds: map[int]json.RawMessage{1: json.RawMessage(`{"client_email":"a@b","private_key":"k"}`)},
+	}
+	got, err := NewGoogleSheetService(repo).WithAPI(stubSheetsAPI{status: 200}).SendTest(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.OK || got.HTTPStatus != 200 || got.Name != "Телефоны" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestGoogleSheetRowUsesPlaceholders(t *testing.T) {
+	row := GoogleSheetRow([]entity.GoogleSheetColumn{
+		{Header: "Телефон", Value: "{{phone}}"},
+		{Header: "Город", Value: "{{city}}"},
+		{Header: "Метка", Value: "лид"},
+	}, PartnerVars{Phone: "79001112233", City: "Химки", Region: "Москва", PhoneValid: true})
+	if strings.Join(row, "|") != "79001112233|Химки|лид" {
+		t.Fatalf("%v", row)
+	}
+	fallback := GoogleSheetRow(nil, PartnerVars{Phone: "7900"})
+	if len(fallback) != 1 || fallback[0] != "7900" {
+		t.Fatalf("%v", fallback)
+	}
+}
+
+func TestPreviewGoogleSheet(t *testing.T) {
+	repo := &stubGoogleSheets{creds: map[int]json.RawMessage{1: json.RawMessage(`{"client_email":"a@b","private_key":"k"}`)}}
+	got, err := NewGoogleSheetService(repo).WithAPI(stubSheetsAPI{status: 200}).Preview(context.Background(), GoogleSheetInput{
+		SpreadsheetID:     "https://docs.google.com/spreadsheets/d/abc123/edit",
+		CredentialsFromID: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SheetName != "Лиды" || len(got.Columns) != 2 {
+		t.Fatalf("%+v", got)
 	}
 }
 

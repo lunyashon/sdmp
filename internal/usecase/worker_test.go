@@ -1147,6 +1147,12 @@ func (s *stubRouteGoogleSheets) Update(context.Context, entity.GoogleSheet, json
 	return entity.GoogleSheet{}, nil
 }
 func (s *stubRouteGoogleSheets) Delete(context.Context, int) error { return nil }
+func (s *stubRouteGoogleSheets) Credentials(context.Context, int) (json.RawMessage, error) {
+	return nil, nil
+}
+func (s *stubRouteGoogleSheets) UpdateCheck(context.Context, int, time.Time, bool, int, string) error {
+	return nil
+}
 func (s *stubRouteGoogleSheets) ListRoutable(_ context.Context, zarya string, regionID *int, sourceID int) ([]entity.GoogleSheetTarget, error) {
 	s.gotZarya = zarya
 	s.gotRegion = regionID
@@ -1156,6 +1162,10 @@ func (s *stubRouteGoogleSheets) ListRoutable(_ context.Context, zarya string, re
 
 type stubGoogleAPI struct {
 	phones []string
+}
+
+func (s *stubGoogleAPI) HeaderRow(context.Context, json.RawMessage, string, string) (string, []string, []string, error) {
+	return "", nil, nil, nil
 }
 
 func (s *stubGoogleAPI) AppendRow(_ context.Context, _ json.RawMessage, _, _ string, values []string) (int, []byte, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -30,7 +31,9 @@ const googleSheetPublicCols = `
 	id, name, spreadsheet_id, sheet_name, is_active, test_mode, COALESCE(zarya_results, '{}'),
 	COALESCE(credentials->>'client_email', ''),
 	COALESCE(credentials->>'project_id', ''),
-	COALESCE(credentials->>'private_key', '') <> ''
+	COALESCE(credentials->>'private_key', '') <> '',
+	last_checked_at, last_ok, last_http_status, COALESCE(last_response, ''),
+	COALESCE(columns, '[]'::jsonb)
 `
 
 func (r *GoogleSheetRepo) List(ctx context.Context) ([]entity.GoogleSheet, error) {
@@ -90,6 +93,44 @@ func (r *GoogleSheetRepo) List(ctx context.Context) ([]entity.GoogleSheet, error
 	return out, nil
 }
 
+func (r *GoogleSheetRepo) Credentials(ctx context.Context, id int) (json.RawMessage, error) {
+	var raw []byte
+	err := r.pool.QueryRow(ctx, `
+		SELECT credentials
+		FROM google_sheet
+		WHERE id = $1
+		  AND COALESCE(credentials->>'private_key', '') <> ''
+	`, id).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: google sheet %d", domain.ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("google sheet credentials: %w", err)
+	}
+	return json.RawMessage(raw), nil
+}
+
+func (r *GoogleSheetRepo) UpdateCheck(ctx context.Context, id int, at time.Time, ok bool, status int, response string) error {
+	if len(response) > 500 {
+		response = response[:500]
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE google_sheet
+		SET last_checked_at = $2,
+		    last_ok = $3,
+		    last_http_status = NULLIF($4, 0),
+		    last_response = $5
+		WHERE id = $1
+	`, id, at, ok, status, response)
+	if err != nil {
+		return fmt.Errorf("update google sheet check: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: google sheet %d", domain.ErrNotFound, id)
+	}
+	return nil
+}
+
 func (r *GoogleSheetRepo) Get(ctx context.Context, id int) (entity.GoogleSheet, error) {
 	item, err := scanGoogleSheet(r.pool.QueryRow(ctx, `
 		SELECT `+googleSheetPublicCols+`
@@ -130,10 +171,10 @@ func (r *GoogleSheetRepo) Create(ctx context.Context, in entity.GoogleSheet, cre
 
 	var id int
 	err = tx.QueryRow(ctx, `
-		INSERT INTO google_sheet (name, spreadsheet_id, sheet_name, credentials, is_active, test_mode, zarya_results, created_at, updated_at)
-		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, now(), now())
+		INSERT INTO google_sheet (name, spreadsheet_id, sheet_name, credentials, is_active, test_mode, zarya_results, columns, created_at, updated_at)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8::jsonb, now(), now())
 		RETURNING id
-	`, in.Name, in.SpreadsheetID, in.SheetName, []byte(credentials), in.IsActive, in.TestMode, in.ZaryaResults).Scan(&id)
+	`, in.Name, in.SpreadsheetID, in.SheetName, []byte(credentials), in.IsActive, in.TestMode, in.ZaryaResults, googleColumnsJSON(in.Columns)).Scan(&id)
 	if err != nil {
 		return entity.GoogleSheet{}, fmt.Errorf("create google sheet: %w", err)
 	}
@@ -155,14 +196,14 @@ func (r *GoogleSheetRepo) Update(ctx context.Context, in entity.GoogleSheet, cre
 
 	query := `
 		UPDATE google_sheet
-		SET name = $2, spreadsheet_id = $3, sheet_name = $4, is_active = $5, test_mode = $6, zarya_results = $7, updated_at = now()
+		SET name = $2, spreadsheet_id = $3, sheet_name = $4, is_active = $5, test_mode = $6, zarya_results = $7, columns = $8::jsonb, updated_at = now()
 		WHERE id = $1
 	`
-	args := []any{in.ID, in.Name, in.SpreadsheetID, in.SheetName, in.IsActive, in.TestMode, in.ZaryaResults}
+	args := []any{in.ID, in.Name, in.SpreadsheetID, in.SheetName, in.IsActive, in.TestMode, in.ZaryaResults, googleColumnsJSON(in.Columns)}
 	if len(credentials) > 0 {
 		query = `
 			UPDATE google_sheet
-			SET name = $2, spreadsheet_id = $3, sheet_name = $4, is_active = $5, test_mode = $6, zarya_results = $7, credentials = $8::jsonb, updated_at = now()
+			SET name = $2, spreadsheet_id = $3, sheet_name = $4, is_active = $5, test_mode = $6, zarya_results = $7, columns = $8::jsonb, credentials = $9::jsonb, updated_at = now()
 			WHERE id = $1
 		`
 		args = append(args, []byte(credentials))
@@ -185,7 +226,7 @@ func (r *GoogleSheetRepo) Update(ctx context.Context, in entity.GoogleSheet, cre
 
 func (r *GoogleSheetRepo) ListRoutable(ctx context.Context, zarya string, regionID *int, sourceID int) ([]entity.GoogleSheetTarget, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT g.id, g.name, g.spreadsheet_id, g.sheet_name, g.credentials
+		SELECT g.id, g.name, g.spreadsheet_id, g.sheet_name, g.credentials, COALESCE(g.columns, '[]'::jsonb)
 		FROM google_sheet g
 		WHERE g.is_active = true
 		  AND $1 = ANY(g.zarya_results)
@@ -211,9 +252,15 @@ func (r *GoogleSheetRepo) ListRoutable(ctx context.Context, zarya string, region
 	out := make([]entity.GoogleSheetTarget, 0)
 	for rows.Next() {
 		var item entity.GoogleSheetTarget
-		if err := rows.Scan(&item.ID, &item.Name, &item.SpreadsheetID, &item.SheetName, &item.Credentials); err != nil {
+		var rawCols []byte
+		if err := rows.Scan(&item.ID, &item.Name, &item.SpreadsheetID, &item.SheetName, &item.Credentials, &rawCols); err != nil {
 			return nil, err
 		}
+		cols, err := decodeGoogleColumns(rawCols)
+		if err != nil {
+			return nil, err
+		}
+		item.Columns = cols
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -292,6 +339,7 @@ type googleSheetScanner interface {
 
 func scanGoogleSheet(row googleSheetScanner) (entity.GoogleSheet, error) {
 	var item entity.GoogleSheet
+	var rawCols []byte
 	if err := row.Scan(
 		&item.ID,
 		&item.Name,
@@ -303,13 +351,48 @@ func scanGoogleSheet(row googleSheetScanner) (entity.GoogleSheet, error) {
 		&item.ClientEmail,
 		&item.ProjectID,
 		&item.HasKey,
+		&item.LastDateRequest,
+		&item.LastRequest,
+		&item.LastHTTPStatus,
+		&item.LastResponse,
+		&rawCols,
 	); err != nil {
 		return entity.GoogleSheet{}, err
 	}
+	cols, err := decodeGoogleColumns(rawCols)
+	if err != nil {
+		return entity.GoogleSheet{}, err
+	}
+	item.Columns = cols
 	if item.ZaryaResults == nil {
 		item.ZaryaResults = []string{}
 	}
 	item.RegionIDs = []int{}
 	item.StopSourceIDs = []int{}
 	return item, nil
+}
+
+func googleColumnsJSON(cols []entity.GoogleSheetColumn) []byte {
+	if cols == nil {
+		cols = []entity.GoogleSheetColumn{}
+	}
+	raw, err := json.Marshal(cols)
+	if err != nil {
+		return []byte("[]")
+	}
+	return raw
+}
+
+func decodeGoogleColumns(raw []byte) ([]entity.GoogleSheetColumn, error) {
+	if len(raw) == 0 {
+		return []entity.GoogleSheetColumn{}, nil
+	}
+	var cols []entity.GoogleSheetColumn
+	if err := json.Unmarshal(raw, &cols); err != nil {
+		return nil, fmt.Errorf("decode google sheet columns: %w", err)
+	}
+	if cols == nil {
+		cols = []entity.GoogleSheetColumn{}
+	}
+	return cols, nil
 }

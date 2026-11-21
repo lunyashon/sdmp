@@ -125,15 +125,22 @@ type SkorozvonLinkList struct {
 
 // GoogleSheetRequest тело создания и обновления инстанса Google Sheets.
 type GoogleSheetRequest struct {
-	Name          string          `json:"name"`
-	SpreadsheetID string          `json:"spreadsheet_id"`
-	SheetName     string          `json:"sheet_name"`
-	IsActive      *bool           `json:"is_active"`
-	TestMode      *bool           `json:"test_mode"`
-	ZaryaResults  []string        `json:"zarya_results"`
-	RegionIDs     []int           `json:"region_ids"`
-	StopSourceIDs []int           `json:"stop_source_ids"`
-	Credentials   json.RawMessage `json:"credentials"`
+	Name              string                     `json:"name"`
+	SpreadsheetID     string                     `json:"spreadsheet_id"`
+	SheetName         string                     `json:"sheet_name"`
+	IsActive          *bool                      `json:"is_active"`
+	TestMode          *bool                      `json:"test_mode"`
+	ZaryaResults      []string                   `json:"zarya_results"`
+	RegionIDs         []int                      `json:"region_ids"`
+	StopSourceIDs     []int                      `json:"stop_source_ids"`
+	Credentials       json.RawMessage            `json:"credentials"`
+	CredentialsFromID int                        `json:"credentials_from_id"`
+	Columns           []entity.GoogleSheetColumn `json:"columns"`
+}
+
+type GoogleAccountList struct {
+	Count int                    `json:"count"`
+	Items []entity.GoogleAccount `json:"items"`
 }
 
 type GoogleSheetList struct {

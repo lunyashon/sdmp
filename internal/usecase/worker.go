@@ -1241,9 +1241,6 @@ func (s *WorkerService) sendToGoogleSheets(ctx context.Context, leadID int64, so
 		return nil
 	}
 	phone = strings.TrimSpace(phone)
-	if phone == "" {
-		return nil
-	}
 	zarya := "unique"
 	if duplicate {
 		zarya = "dup"
@@ -1264,21 +1261,22 @@ func (s *WorkerService) sendToGoogleSheets(ctx context.Context, leadID int64, so
 		return nil
 	}
 
+	vars := PartnerVars{Phone: phone, PhoneValid: true, Region: strings.TrimSpace(region), City: partnerCity(ctx, s.leads, leadID)}
 	var wg sync.WaitGroup
 	for i := range items {
 		sheet := items[i]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.sendOneGoogleSheet(ctx, leadID, zarya, phone, sheet)
+			s.sendOneGoogleSheet(ctx, leadID, zarya, vars, sheet)
 		}()
 	}
 	wg.Wait()
 	return nil
 }
 
-func (s *WorkerService) sendOneGoogleSheet(ctx context.Context, leadID int64, zarya, phone string, sheet entity.GoogleSheetTarget) {
-	raw, status, attempts, err := s.postGoogleSheet(ctx, sheet, phone)
+func (s *WorkerService) sendOneGoogleSheet(ctx context.Context, leadID int64, zarya string, vars PartnerVars, sheet entity.GoogleSheetTarget) {
+	raw, status, attempts, err := s.postGoogleSheet(ctx, sheet, vars)
 	ok := err == nil && status >= 200 && status < 300
 	if !ok {
 		s.log.Error("google sheet send failed",
@@ -1305,7 +1303,11 @@ func (s *WorkerService) sendOneGoogleSheet(ctx context.Context, leadID int64, za
 	s.saveGoogleDispatch(ctx, leadID, sheet.ID, ok, status, attempts, raw, err)
 }
 
-func (s *WorkerService) postGoogleSheet(ctx context.Context, sheet entity.GoogleSheetTarget, phone string) ([]byte, int, int16, error) {
+func (s *WorkerService) postGoogleSheet(ctx context.Context, sheet entity.GoogleSheetTarget, vars PartnerVars) ([]byte, int, int16, error) {
+	values := GoogleSheetRow(sheet.Columns, vars)
+	if len(values) == 0 {
+		return nil, 0, 0, fmt.Errorf("google sheet %d has nothing to append", sheet.ID)
+	}
 	waits := s.retryWaits
 	if len(waits) == 0 {
 		waits = partnerRetryWaits
@@ -1323,7 +1325,7 @@ func (s *WorkerService) postGoogleSheet(ctx context.Context, sheet entity.Google
 			}
 		}
 		attempts++
-		status, raw, err = s.googleAPI.AppendRow(ctx, sheet.Credentials, sheet.SpreadsheetID, sheet.SheetName, []string{phone})
+		status, raw, err = s.googleAPI.AppendRow(ctx, sheet.Credentials, sheet.SpreadsheetID, sheet.SheetName, values)
 		if !retryPartner(status, err) {
 			return raw, status, attempts, err
 		}

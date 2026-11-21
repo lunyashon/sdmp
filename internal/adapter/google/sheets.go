@@ -86,8 +86,144 @@ func (c *Client) AppendRow(ctx context.Context, credentials json.RawMessage, spr
 	return status, body, nil
 }
 
+// HeaderRow читает названия листов и первую строку. Пустой sheetName — первый лист книги.
+func (c *Client) HeaderRow(ctx context.Context, credentials json.RawMessage, spreadsheetID, sheetName string) (string, []string, []string, error) {
+	sa, err := parseServiceAccount(credentials)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	spreadsheetID = strings.TrimSpace(spreadsheetID)
+	if spreadsheetID == "" {
+		return "", nil, nil, fmt.Errorf("spreadsheet_id is required")
+	}
+	token, err := c.accessToken(ctx, sa)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	resolved, columns, sheets, status, err := c.readHeader(ctx, token, spreadsheetID, sheetName)
+	if status == http.StatusUnauthorized {
+		c.forget(sa.ClientEmail)
+		token, err = c.accessToken(ctx, sa)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		resolved, columns, sheets, status, err = c.readHeader(ctx, token, spreadsheetID, sheetName)
+	}
+	return resolved, columns, sheets, err
+}
+
+func (c *Client) readHeader(ctx context.Context, token, spreadsheetID, sheetName string) (string, []string, []string, int, error) {
+	metaStatus, metaBody, err := c.getJSON(ctx, token, "https://sheets.googleapis.com/v4/spreadsheets/"+url.PathEscape(spreadsheetID)+"?fields=sheets.properties.title")
+	if err != nil {
+		return "", nil, nil, metaStatus, err
+	}
+	if metaStatus < 200 || metaStatus >= 300 {
+		return "", nil, nil, metaStatus, fmt.Errorf("google sheets HTTP %d: %s", metaStatus, googleError(metaBody))
+	}
+	var meta struct {
+		Sheets []struct {
+			Properties struct {
+				Title string `json:"title"`
+			} `json:"properties"`
+		} `json:"sheets"`
+	}
+	if err := json.Unmarshal(metaBody, &meta); err != nil {
+		return "", nil, nil, metaStatus, fmt.Errorf("decode spreadsheet: %w", err)
+	}
+	sheets := make([]string, 0, len(meta.Sheets))
+	for _, sheet := range meta.Sheets {
+		title := strings.TrimSpace(sheet.Properties.Title)
+		if title != "" {
+			sheets = append(sheets, title)
+		}
+	}
+	if len(sheets) == 0 {
+		return "", nil, nil, metaStatus, fmt.Errorf("в таблице нет листов")
+	}
+	sheetName = strings.TrimSpace(sheetName)
+	if sheetName == "" {
+		sheetName = sheets[0]
+	} else if !containsSheet(sheets, sheetName) {
+		return "", nil, sheets, metaStatus, fmt.Errorf("листа %q нет. В таблице: %s", sheetName, strings.Join(sheets, ", "))
+	}
+
+	rangeExpr := "'" + strings.ReplaceAll(sheetName, "'", "''") + "'!1:1"
+	status, body, err := c.getJSON(ctx, token, "https://sheets.googleapis.com/v4/spreadsheets/"+url.PathEscape(spreadsheetID)+"/values/"+url.PathEscape(rangeExpr))
+	if err != nil {
+		return sheetName, nil, sheets, status, err
+	}
+	if status < 200 || status >= 300 {
+		return sheetName, nil, sheets, status, fmt.Errorf("google sheets HTTP %d: %s", status, googleError(body))
+	}
+	var decoded struct {
+		Values [][]string `json:"values"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return sheetName, nil, sheets, status, fmt.Errorf("decode header row: %w", err)
+	}
+	var row []string
+	if len(decoded.Values) > 0 {
+		row = decoded.Values[0]
+	}
+	columns := cleanSheetHeaders(row)
+	if len(columns) == 0 {
+		return sheetName, nil, sheets, status, fmt.Errorf("в первой строке листа %q нет заголовков", sheetName)
+	}
+	return sheetName, columns, sheets, status, nil
+}
+
+func (c *Client) getJSON(ctx context.Context, token, endpoint string) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	return resp.StatusCode, body, nil
+}
+
+func containsSheet(sheets []string, name string) bool {
+	for _, sheet := range sheets {
+		if sheet == name {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanSheetHeaders(row []string) []string {
+	end := len(row)
+	for end > 0 && strings.TrimSpace(row[end-1]) == "" {
+		end--
+	}
+	if end == 0 {
+		return nil
+	}
+	if end > 60 {
+		end = 60
+	}
+	out := make([]string, 0, end)
+	for i := 0; i < end; i++ {
+		header := strings.TrimSpace(row[i])
+		if header == "" {
+			header = fmt.Sprintf("Колонка %d", i+1)
+		}
+		out = append(out, header)
+	}
+	return out
+}
+
 func (c *Client) postAppend(ctx context.Context, token, spreadsheetID, sheetName string, values []string) (int, []byte, error) {
-	rangeExpr := "'" + strings.ReplaceAll(sheetName, "'", "''") + "'!A:A"
+	rangeExpr := "'" + strings.ReplaceAll(sheetName, "'", "''") + "'!A:ZZ"
 	endpoint := "https://sheets.googleapis.com/v4/spreadsheets/" +
 		url.PathEscape(spreadsheetID) +
 		"/values/" + url.PathEscape(rangeExpr) +

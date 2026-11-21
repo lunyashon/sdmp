@@ -64,11 +64,49 @@ func TestAppendRowPostsPhone(t *testing.T) {
 	if gotAuth != "Bearer tok-1" {
 		t.Fatalf("auth %s", gotAuth)
 	}
-	if !strings.Contains(gotRange, "/v4/spreadsheets/sheet-id/values/") || !strings.Contains(gotRange, "A:A") {
+	if !strings.Contains(gotRange, "/v4/spreadsheets/sheet-id/values/") || !strings.Contains(gotRange, "A:ZZ") {
 		t.Fatalf("range path %s", gotRange)
 	}
 	if !strings.Contains(gotBody, `"79001234567"`) {
 		t.Fatalf("body %s", gotBody)
+	}
+}
+
+func TestHeaderRowReadsFirstSheet(t *testing.T) {
+	key := mustRSA(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"tok-1","expires_in":3600}`))
+	})
+	mux.HandleFunc("/v4/spreadsheets/sheet-id", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"sheets":[{"properties":{"title":"Лиды"}},{"properties":{"title":"Архив"}}]}`))
+	})
+	mux.HandleFunc("/v4/spreadsheets/sheet-id/values/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "1:1") {
+			t.Fatalf("path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"values":[["Телефон","","Город"]]}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := New()
+	client.http = srv.Client()
+	client.http.Transport = rewriteHost{base: srv.URL, next: srv.Client().Transport}
+	creds, _ := json.Marshal(map[string]string{
+		"client_email": "dev-service@example.iam.gserviceaccount.com",
+		"private_key":  pemPKCS8(t, key),
+		"token_uri":    srv.URL + "/token",
+	})
+	sheet, columns, sheets, err := client.HeaderRow(context.Background(), creds, "sheet-id", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sheet != "Лиды" || strings.Join(columns, "|") != "Телефон|Колонка 2|Город" {
+		t.Fatalf("sheet %s columns %v", sheet, columns)
+	}
+	if strings.Join(sheets, "|") != "Лиды|Архив" {
+		t.Fatalf("sheets %v", sheets)
 	}
 }
 

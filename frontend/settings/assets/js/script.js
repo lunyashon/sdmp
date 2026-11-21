@@ -527,8 +527,24 @@ function svyazkaProjectTitle(s) {
 }
 
 async function loadGoogleSheets() {
-  const data = await apiJSON('/rest/google/sheets');
+  const [data, accounts] = await Promise.all([
+    apiJSON('/rest/google/sheets'),
+    apiJSON('/rest/google/accounts'),
+  ]);
   DATA.googleSheets = data.items || [];
+  DATA.googleAccounts = accounts.items || [];
+}
+
+function googleAccountByEmail(email) {
+  return (DATA.googleAccounts || []).find(a => a.client_email === email) || null;
+}
+
+function googleAccessHTML(email) {
+  if (!email) return '';
+  return `<div style="margin-top:8px; padding:10px 12px; background:#f4f7f3; border:1px solid #d5e0d4; border-radius:6px; font-size:13px; line-height:1.45;">
+    Откройте таблицу на редактирование для<br>
+    <span style="display:inline-flex; align-items:center; gap:6px; margin-top:4px; font-family:monospace; font-size:12.5px;">${escAttr(email)} ${copyIconBtn(email, 'Email сервисного аккаунта')}</span>
+  </div>`;
 }
 
 function googleSheetURL(spreadsheetId) {
@@ -550,7 +566,12 @@ function googleSheetCardHTML(s) {
     <div class="partner-summary-row"><span class="k">Регион</span><span class="v">${regions.length ? regions.length + ' в списке' : 'не проверяется'}</span></div>
     <div class="partner-summary-row"><span class="k">Стоп-источники</span><span class="v">${stops.length ? stops.length : 'нет'}</span></div>
     <div class="partner-summary-row"><span class="k">Лист</span><span class="v">${escAttr(s.sheet_name || '—')}</span></div>
-    <button class="btn btn-sm partner-card-action" onclick="openGoogleSheetModal(${s.id})">Настроить</button>
+    <div class="partner-summary-row"><span class="k">Колонки</span><span class="v">${(s.columns || []).length ? (s.columns || []).length : 'только телефон'}</span></div>
+    <div class="partner-summary-row"><span class="k">Доступ</span><span class="v" style="font-family:monospace; font-size:11.5px;">${escAttr(s.client_email || '—')}</span></div>
+    <div class="partner-card-actions">
+      <button class="btn btn-sm partner-card-action" onclick="openGoogleSheetModal(${s.id})">Настроить</button>
+      <button class="btn btn-sm partner-card-action" onclick="sendGoogleSheetTest(${s.id})">Отправить тест</button>
+    </div>
   </div>`;
 }
 
@@ -581,9 +602,11 @@ function enterGoogleSheetEditMode() {
   googleEditing = true;
   googleRegionSearch = '';
   if (googleModalId === null) {
-    googleDraft = { name: '', spreadsheet_id: '', sheet_name: 'Телефоны', is_active: true, test_mode: true, zarya_results: [], regions: [], stops: [], credentials_text: '' };
+    const first = (DATA.googleAccounts || [])[0];
+    googleDraft = { name: '', spreadsheet_id: '', sheet_name: '', is_active: true, test_mode: true, zarya_results: [], regions: [], stops: [], credentials_text: '', account_id: first ? String(first.id) : 'new', columns: [], available_sheets: [] };
   } else {
     const s = DATA.googleSheets.find(x => x.id === googleModalId);
+    const known = googleAccountByEmail(s.client_email);
     googleDraft = {
       name: s.name,
       spreadsheet_id: s.spreadsheet_id,
@@ -593,13 +616,20 @@ function enterGoogleSheetEditMode() {
       zarya_results: (s.zarya_results || []).slice(),
       regions: (s.region_ids || []).slice(),
       stops: (s.stop_source_ids || []).slice(),
-      credentials_text: ''
+      credentials_text: '',
+      account_id: known ? String(known.id) : ((DATA.googleAccounts || [])[0] ? String(DATA.googleAccounts[0].id) : 'new'),
+      columns: (s.columns || []).map(c => ({ header: c.header, value: c.value || '' })),
+      available_sheets: s.sheet_name ? [s.sheet_name] : [],
     };
   }
   document.getElementById('google-apply-btn').textContent = googleModalId === null ? 'Создать инстанс' : 'Применить изменения';
   renderGoogleSheetModal();
 }
 function draftGoogleField(field, value) { googleDraft[field] = value; }
+function draftGoogleAccount(value) {
+  googleDraft.account_id = value;
+  renderGoogleSheetModal();
+}
 function draftGoogleZaryaToggle(value, checked) {
   if (checked) { if (!googleDraft.zarya_results.includes(value)) googleDraft.zarya_results.push(value); }
   else { googleDraft.zarya_results = googleDraft.zarya_results.filter(v => v !== value); }
@@ -659,8 +689,8 @@ function renderGoogleSheetModal() {
       <div class="partner-field"><label>Что принимает</label><span class="cell-static">${zaryaSummaryLabel(s.zarya_results)}</span></div>
       <div class="partner-field"><label>Регион</label><span class="cell-static">${regions.length ? regions.join(', ') : 'не проверяется'}</span></div>
       <div class="partner-field"><label>Стоп-источники</label><span class="cell-static">${stops.length ? stops.join(', ') : 'нет'}</span></div>
-      <div class="partner-field"><label>Сервисный аккаунт</label><span class="cell-static">${escAttr(s.client_email || '—')}</span></div>
-      <div class="partner-field"><label>Ключ</label><span class="cell-static">${s.has_key ? 'загружен, в интерфейсе не показывается' : 'нет'}</span></div>
+      <div class="partner-field"><label>Кому открыть таблицу</label>${s.client_email ? googleAccessHTML(s.client_email) : '<span class="cell-static">ключ не загружен</span>'}</div>
+      <div class="partner-field"><label>Колонки</label>${googleColumnsViewHTML(s.columns)}</div>
     `;
     return;
   }
@@ -682,8 +712,8 @@ function renderGoogleSheetModal() {
       <input class="cell-input" style="border:1px solid var(--border-strong); font-family:monospace; font-size:12px;" value="${escAttr(googleDraft.spreadsheet_id)}" placeholder="id из URL таблицы" onchange="draftGoogleField('spreadsheet_id', this.value)">
     </div>
     <div class="partner-field">
-      <label>Имя листа</label>
-      <input class="cell-input" style="border:1px solid var(--border-strong);" value="${escAttr(googleDraft.sheet_name)}" onchange="draftGoogleField('sheet_name', this.value)">
+      <label>Имя листа ${helpIcon('Пусто — читаем первый лист книги. После проверки имя подставится само.')}</label>
+      <input class="cell-input" style="border:1px solid var(--border-strong);" value="${escAttr(googleDraft.sheet_name)}" placeholder="пусто — первый лист" onchange="draftGoogleField('sheet_name', this.value)">
     </div>
     <div class="partner-field">
       <label>Что принимает ${helpIcon('Результат проверки по Заре. Можно отметить несколько вариантов сразу.')}</label>
@@ -710,10 +740,93 @@ function renderGoogleSheetModal() {
       <div style="margin-top:6px; width:220px;">${comboHTML(cAddStop, '', '+ добавить стоп-источник')}</div>
     </div>
     <div class="partner-field">
-      <label>JSON сервисного аккаунта ${googleModalId === null ? '' : '(оставьте пустым, чтобы не менять ключ)'}</label>
-      <textarea class="cell-textarea" placeholder='{"type":"service_account","client_email":"...","private_key":"..."}' onchange="draftGoogleField('credentials_text', this.value)">${escAttr(googleDraft.credentials_text || '')}</textarea>
+      <label>Сервисный аккаунт</label>
+      <select class="cell-input" style="border:1px solid var(--border-strong);" onchange="draftGoogleAccount(this.value)">
+        ${(DATA.googleAccounts || []).map(a => `<option value="${a.id}" ${String(googleDraft.account_id) === String(a.id) ? 'selected' : ''}>${escAttr(a.client_email)}</option>`).join('')}
+        <option value="new" ${googleDraft.account_id === 'new' ? 'selected' : ''}>Другой ключ…</option>
+      </select>
+      ${googleDraft.account_id === 'new'
+        ? `<textarea class="cell-textarea" style="margin-top:8px;" placeholder='{"type":"service_account","client_email":"...","private_key":"..."}' onchange="draftGoogleField('credentials_text', this.value)">${escAttr(googleDraft.credentials_text || '')}</textarea>`
+        : googleAccessHTML(((DATA.googleAccounts || []).find(a => String(a.id) === String(googleDraft.account_id)) || {}).client_email)}
     </div>
+    ${googleColumnEditorHTML()}
   `;
+}
+
+const GOOGLE_PLACEHOLDERS = [
+  ['{{phone}}', 'Телефон'],
+  ['{{phone_valid}}', 'Телефон валиден'],
+  ['{{region}}', 'Регион'],
+  ['{{city}}', 'Город'],
+];
+
+function googleColumnsViewHTML(columns) {
+  if (!columns || !columns.length) return '<span class="cell-static">не заданы — уходит только телефон в первую колонку</span>';
+  return columns.map(c => `<div style="font-size:12.5px; padding:2px 0;"><span style="color:var(--text-muted);">${escAttr(c.header)}</span> → <span style="font-family:monospace;">${escAttr(c.value || '—')}</span></div>`).join('');
+}
+
+function googleColumnEditorHTML() {
+  const cols = googleDraft.columns || [];
+  const sheets = googleDraft.available_sheets || [];
+  const sheetPick = sheets.length > 1 ? `
+    <select class="cell-input" style="border:1px solid var(--border-strong); margin-bottom:8px;" onchange="draftGoogleField('sheet_name', this.value)">
+      ${sheets.map(name => `<option value="${escAttr(name)}" ${googleDraft.sheet_name === name ? 'selected' : ''}>${escAttr(name)}</option>`).join('')}
+    </select>` : '';
+  const rows = cols.map((c, i) => {
+    const known = GOOGLE_PLACEHOLDERS.some(([v]) => v === c.value);
+    return `
+      <div class="partner-body-row" style="grid-template-columns: minmax(90px, 0.9fr) minmax(110px, 1fr) minmax(150px, 1.1fr);">
+        <span style="font-size:12.5px;">${escAttr(c.header)}</span>
+        <input class="cell-input" style="border:1px solid var(--border-strong); font-family:monospace; font-size:12px;" value="${escAttr(c.value || '')}" placeholder="что отправить" onchange="draftGoogleColumn(${i}, this.value)">
+        <select class="cell-input" style="border:1px solid var(--border-strong);" onchange="draftGoogleColumn(${i}, this.value); renderGoogleSheetModal()">
+          <option value="" ${known ? '' : 'selected'}>свой текст</option>
+          ${GOOGLE_PLACEHOLDERS.map(([v, label]) => `<option value="${v}" ${c.value === v ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+      </div>`;
+  }).join('');
+  return `
+    <div class="partner-field">
+      <label>Колонки ${helpIcon('Сначала проверяем, что сервисный аккаунт читает таблицу. Первая строка — названия колонок. В каждую подставляется плейсхолдер или свой текст.')}</label>
+      ${sheetPick}
+      <button type="button" class="btn btn-sm" onclick="readGoogleSheet()">Прочитать таблицу</button>
+      <div style="font-size:12px; color:var(--text-muted); margin-top:6px;">Плейсхолдеры: {{phone}}, {{phone_valid}}, {{region}}, {{city}}. Пустые колонки в настройке — в таблицу уходит только телефон в первый столбец.</div>
+      ${rows ? `<div class="partner-body-rows" style="margin-top:8px;">${rows}</div>` : ''}
+    </div>`;
+}
+
+function draftGoogleColumn(index, value) {
+  if (!googleDraft.columns || !googleDraft.columns[index]) return;
+  googleDraft.columns[index].value = value;
+}
+
+async function readGoogleSheet() {
+  if (!googleDraft.spreadsheet_id.trim()) { showError('Укажите spreadsheet_id.'); return; }
+  let body;
+  try {
+    body = googleSheetPayload(googleDraft);
+  } catch (err) {
+    showError('JSON ключа не разбирается: ' + (err.message || err));
+    return;
+  }
+  showTestToast('Читаем таблицу…');
+  try {
+    const data = await apiJSON('/rest/google/sheets/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const headers = data.columns || [];
+    if (!headers.length) { showError('В первой строке нет заголовков.'); return; }
+    const prev = {};
+    (googleDraft.columns || []).forEach(c => { prev[c.header] = c.value; });
+    googleDraft.columns = headers.map(h => ({ header: h, value: prev[h] || '' }));
+    if (data.sheet_name) googleDraft.sheet_name = data.sheet_name;
+    googleDraft.available_sheets = data.sheets || [];
+    renderGoogleSheetModal();
+    showTestToast('Таблица прочитана. Выберите, что отправлять в колонки');
+  } catch (err) {
+    showError(err.message || 'Не удалось прочитать таблицу');
+  }
 }
 
 function googleSheetPayload(draft) {
@@ -726,18 +839,27 @@ function googleSheetPayload(draft) {
     zarya_results: draft.zarya_results || [],
     region_ids: draft.regions || [],
     stop_source_ids: draft.stops || [],
+    columns: (draft.columns || []).map(c => ({ header: c.header, value: c.value || '' })),
   };
-  const raw = String(draft.credentials_text || '').trim();
-  if (raw) body.credentials = JSON.parse(raw);
+  if (draft.account_id === 'new') {
+    const raw = String(draft.credentials_text || '').trim();
+    if (raw) body.credentials = JSON.parse(raw);
+  } else if (draft.account_id) {
+    body.credentials_from_id = parseInt(draft.account_id, 10);
+  }
   return body;
 }
 
 function applyGoogleSheetDraft() {
   if (!googleDraft.name.trim()) { showError('Укажите название инстанса.'); return; }
   if (!googleDraft.spreadsheet_id.trim()) { showError('Укажите spreadsheet_id.'); return; }
-  if (!googleDraft.sheet_name.trim()) { showError('Укажите имя листа.'); return; }
-  if (googleModalId === null && !String(googleDraft.credentials_text || '').trim()) {
-    showError('Вставьте JSON сервисного аккаунта.');
+  if (!googleDraft.sheet_name.trim()) { showError('Прочитайте таблицу или укажите имя листа.'); return; }
+  if (googleDraft.account_id === 'new' && googleModalId === null && !String(googleDraft.credentials_text || '').trim()) {
+    showError('Выберите сервисный аккаунт или вставьте JSON ключа.');
+    return;
+  }
+  if (googleDraft.account_id !== 'new' && !(DATA.googleAccounts || []).some(a => String(a.id) === String(googleDraft.account_id))) {
+    showError('Выберите сервисный аккаунт.');
     return;
   }
   let body;
@@ -882,6 +1004,7 @@ let DATA = {
   operatorDict: [],
   bitrixMap: null,
   googleSheets: [],
+  googleAccounts: [],
   regionDict: [
     { id:1, canonical:'Московская область', raw:['Москва','Москва и Московская область','Московская обл.','Московская область * Москва'] },
     { id:2, canonical:'Кемеровская область', raw:['Кемеровская обл.','Кемеровская область - Кузбасс'] },
@@ -1204,6 +1327,7 @@ async function showTab(id, opts = {}) {
     checkCurrentSkorozvonProjects();
     refreshCrmcallsProjectsCheck();
   }
+  if (id === 'partners') loadOutgoingStats();
   if (id === 'skorozvonBitrix') loadSkorozvonBitrixStats();
   if (id === 'regionControl') loadRegionStats();
   if (id === 'operatorControl') loadOperatorStats();
@@ -1365,13 +1489,17 @@ const PANEL_RENDERERS = {
         <div class="partner-summary-row"><span class="k">Стоп-источники</span><span class="v">${stops.length ? stops.length : 'нет'}</span></div>
         <div class="partner-summary-row"><span class="k">Параметры</span><span class="v">${Object.keys(u.body || {}).length || 'нет'}</span></div>
         <div class="partner-summary-row"><span class="k">Content-Type</span><span class="v" style="font-family:monospace; font-size:11.5px;">${u.content_type || 'application/x-www-form-urlencoded'}</span></div>
-        <button class="btn btn-sm partner-card-action" onclick="openPartnerModal(${u.id})">Настроить</button>
+        <div class="partner-card-actions">
+          <button class="btn btn-sm partner-card-action" onclick="openPartnerModal(${u.id})">Настроить</button>
+          <button class="btn btn-sm partner-card-action" onclick="sendPartnerTest(${u.id})">Отправить тест</button>
+        </div>
       </div>`;
     }
     const cardsHTML = DATA.upk.map(summaryCardHTML).join('');
     const googleHTML = (DATA.googleSheets || []).map(googleSheetCardHTML).join('');
     return {
       customHTML: `
+        ${partnerActivityBlock()}
         <div class="partners-lead-note">
           Все покупатели равноправны — приоритета между ними нет. Если строка подходит нескольким сразу, уходит всем одновременно (параллельно). Что принимать — дубль или уникальную строку — настраивается у каждого покупателя. Ошибка ответа Зари никуда не уходит.
         </div>
@@ -1465,20 +1593,7 @@ const PANEL_RENDERERS = {
   },
 
   outgoingTraffic: () => {
-    const partners = DATA.upk || [];
     const projects = DATA.skorozvonProjects || [];
-
-    const rows = partners.map(u => `
-      <tr>
-        <td>${fmtCheckTime(u.last_date_request)}</td>
-        <td>${escAttr(u.nazvanie)}</td>
-        <td>${outgoingPartnerCount(u.id)}</td>
-        <td>
-          ${partnerCheckLabel(u)}
-          <div style="margin-top:6px;"><button class="btn btn-sm" onclick="sendPartnerTest(${u.id})">Отправить тест</button></div>
-        </td>
-      </tr>`).join('');
-
     const visibleProjects = projects.filter(p => p.visible);
     const projectRows = visibleProjects.map(p => `
       <tr>
@@ -1504,19 +1619,13 @@ const PANEL_RENDERERS = {
     const ccKeyPlaceholder = cc.has_key ? (cc.api_key_masked || 'ключ сохранён') : 'crmc_live_\u2026';
 
     return {
-      headers:['Время проверки активности','Куда','Строк','Статус'],
-      rows, addFn:null,
+      customHTML: '<div></div>',
+      addFn:null,
       customTop: `
         <div style="display:flex; align-items:flex-end; gap:8px; margin-bottom:16px;">
           <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">С</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${outgoingRange.from}" onchange="setOutgoingRange('from', this.value)"></div>
           <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">По</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${outgoingRange.to}" onchange="setOutgoingRange('to', this.value)"></div>
-        </div>
-
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <div style="font-size:13px; font-weight:600;">Проверка активности</div>
-          ${hintIconBtn('refresh', 'Обновить статус активности', 'refreshOutgoingTraffic()')}
-            </div>
-        <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">Кнопка шлёт проверку во все проекты Скорозвона и CRMCalls и тестовую заявку на webhook каждого партнёра. В таблице \u2014 последний ответ.</p>`,
+        </div>`,
       customAfter: `
         <div style="margin-top:22px;">
           <div style="font-size:13px; font-weight:600; margin-bottom:8px;">Строк по проектам Скорозвона за период</div>
@@ -1926,7 +2035,7 @@ async function loadOutgoingStats() {
   const key = outgoingRangeKey();
   const gen = ++outgoingStatsGen;
   outgoingStats = { key, loading: true, error: '', partners: {}, skorozvon: {}, crmcalls: {} };
-  if (activeTab === 'outgoingTraffic') renderPanels();
+  if (activeTab === 'outgoingTraffic' || activeTab === 'partners') renderPanels();
   try {
     const q = 'date_from=' + encodeURIComponent(outgoingRange.from) + '&date_to=' + encodeURIComponent(outgoingRange.to);
     const data = await apiJSON('/rest/leads/outgoing-stats?' + q);
@@ -1942,7 +2051,7 @@ async function loadOutgoingStats() {
     if (gen !== outgoingStatsGen) return;
     outgoingStats = { key, loading: false, error: err.message || 'Не удалось загрузить строки', partners: {}, skorozvon: {}, crmcalls: {} };
   }
-  if (activeTab === 'outgoingTraffic') renderPanels();
+  if (activeTab === 'outgoingTraffic' || activeTab === 'partners') renderPanels();
 }
 function setOutgoingRange(field, value) {
   outgoingRange[field] = value;
@@ -2020,39 +2129,65 @@ function humanPartnerReply(text) {
   if (/^[{[]/.test(src)) return 'Партнёр вернул ответ';
   return src.length > 140 ? src.slice(0, 137) + '\u2026' : src;
 }
+function partnerActivityBlock() {
+  const partners = DATA.upk || [];
+  const sheets = DATA.googleSheets || [];
+  const rows = partners.map(u => `
+      <tr>
+        <td>${fmtCheckTime(u.last_date_request)}</td>
+        <td>${escAttr(u.nazvanie)}</td>
+        <td>${outgoingPartnerCount(u.id)}</td>
+        <td>
+          ${partnerCheckLabel(u)}
+          <div style="margin-top:6px;"><button class="btn btn-sm" onclick="sendPartnerTest(${u.id})">Отправить тест</button></div>
+        </td>
+      </tr>`).join('') + sheets.map(s => `
+      <tr>
+        <td>${fmtCheckTime(s.last_date_request)}</td>
+        <td>${escAttr(s.name)} <span style="color:var(--text-muted); font-size:11px;">Google Sheets</span></td>
+        <td>—</td>
+        <td>
+          ${partnerCheckLabel(s)}
+          <div style="margin-top:6px;"><button class="btn btn-sm" onclick="sendGoogleSheetTest(${s.id})">Отправить тест</button></div>
+        </td>
+      </tr>`).join('');
+  return `
+    <div style="margin-bottom:18px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:6px;">
+        <div style="font-size:13px; font-weight:600;">Проверка активности</div>
+        <div style="display:flex; align-items:flex-end; gap:8px;">
+          <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">С</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${outgoingRange.from}" onchange="setOutgoingRange('from', this.value)"></div>
+          <div class="field"><label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:2px;">По</label><input type="date" class="cell-input" style="border:1px solid var(--border-strong);" value="${outgoingRange.to}" onchange="setOutgoingRange('to', this.value)"></div>
+          ${hintIconBtn('refresh', 'Проверить партнёров и Google Sheets', 'refreshPartnerChecks()')}
+        </div>
+      </div>
+      <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">Кнопка шлёт тестовую заявку на webhook каждого партнёра и тестовую строку в каждую таблицу Google Sheets.</p>
+      <table>
+        <thead><tr><th>Время проверки активности</th><th>Куда</th><th>Строк</th><th>Статус</th></tr></thead>
+        <tbody>${rows || '<tr class="empty-row"><td colspan="4">Партнёров нет</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
 function partnerCheckLabel(u) {
   if (!u.last_date_request) return '\u2014';
   const reply = partnerReply(u);
   return `<span class="status-pill ${reply.ok ? 'on' : 'off'}">${escAttr(reply.pill)}</span>
     <div style="font-size:12px; color:var(--text-2); margin-top:4px; line-height:1.35;">${escAttr(reply.text)}</div>`;
 }
-async function refreshOutgoingTraffic() {
+async function refreshPartnerChecks() {
   try {
-    showTestToast('Проверяем Скорозвон, CRMCalls и партнёров\u2026');
-    const results = await Promise.allSettled([
-      apiJSON('/rest/skorozvon/projects/refresh', { method: 'POST' }),
+    showTestToast('Проверяем партнёров и Google Sheets\u2026');
+    await Promise.all([
       apiJSON('/rest/partners/refresh', { method: 'POST' }),
-      apiJSON('/rest/crmcalls/projects/refresh', { method: 'POST' }),
+      apiJSON('/rest/google/sheets/refresh', { method: 'POST' }),
     ]);
-    fetched.skorozvonProjects = false;
-    fetched.crmcallsProjects = false;
-    await Promise.all([loadSkorozvonProjects(), loadPartners(), loadCrmcallsProjects()]);
-    fetched.skorozvonProjects = true;
-    fetched.crmcallsProjects = true;
+    fetched.googleSheets = false;
+    await Promise.all([loadPartners(), loadGoogleSheets()]);
+    fetched.googleSheets = true;
     renderPanels();
-    const failed = results.filter(r => r.status === 'rejected');
-    if (failed.length === results.length) {
-      showError(failed[0].reason && failed[0].reason.message || 'Не удалось проверить активность');
-      return;
-    }
-    if (failed.length) {
-      showTestToast('Часть проверок не прошла: ' + ((failed[0].reason && failed[0].reason.message) || ''), true);
-    } else {
-      showTestToast('Статус активности обновлён');
-    }
-    showToast(activeTab);
+    showTestToast('Статус активности обновлён');
   } catch (err) {
-    showError(err.message || 'Не удалось проверить активность');
+    showError(err.message || 'Не удалось проверить партнёров');
   }
 }
 async function sendPartnerTest(id) {
@@ -2074,6 +2209,22 @@ async function sendPartnerTest(id) {
     }
     await loadPartners();
     renderPanels();
+  } catch (err) {
+    showTestToast('Ошибка тестирования \u2014 ' + name + ': ' + (err.message || ''), true);
+  }
+}
+async function sendGoogleSheetTest(id) {
+  const s = (DATA.googleSheets || []).find(x => x.id === id);
+  const name = s ? s.name : ('#' + id);
+  showTestToast('Пишем тестовую строку в «' + name + '»\u2026');
+  try {
+    const data = await apiJSON('/rest/google/sheets/' + id + '/test', { method: 'POST' });
+    fetched.googleSheets = false;
+    await loadGoogleSheets();
+    fetched.googleSheets = true;
+    renderPanels();
+    if (data && data.ok) showTestToast('«' + name + '»: тестовая строка записана');
+    else showTestToast('«' + name + '»: ' + ((data && data.response) || 'таблица не приняла строку'), true);
   } catch (err) {
     showTestToast('Ошибка тестирования \u2014 ' + name + ': ' + (err.message || ''), true);
   }

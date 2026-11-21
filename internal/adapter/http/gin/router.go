@@ -114,7 +114,11 @@ func NewRouter(h Handlers, config *config.Config) *gongin.Engine {
 			rest.POST("/bitrix/lead-map/refresh", h.BitrixMaps.Refresh)
 		}
 		if h.GoogleSheets != nil {
+			rest.GET("/google/accounts", h.GoogleSheets.Accounts)
 			rest.GET("/google/sheets", h.GoogleSheets.List)
+			rest.POST("/google/sheets/refresh", h.GoogleSheets.Refresh)
+			rest.POST("/google/sheets/preview", h.GoogleSheets.Preview)
+			rest.POST("/google/sheets/:id/test", h.GoogleSheets.SendTest)
 			rest.POST("/google/sheets", h.GoogleSheets.Create)
 			rest.PUT("/google/sheets/:id", h.GoogleSheets.Update)
 			rest.DELETE("/google/sheets/:id", h.GoogleSheets.Delete)
